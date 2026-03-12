@@ -35,7 +35,20 @@
       "Bash(timeout 8 npx electron . 2>&1 || true)",
       "Bash(node -e \"const m = require\\('@xterm/addon-fit'\\); console.log\\(Object.keys\\(m\\)\\);\")",
       "Bash(node -e \"\nconst fs = require\\('fs'\\);\nconst code = fs.readFileSync\\('node_modules/@xterm/addon-fit/lib/addon-fit.js', 'utf8'\\);\n// Check the UMD wrapper\nconsole.log\\(code.substring\\(0, 300\\)\\);\n\")",
-      "Bash(node -e \"\nconst fs = require\\('fs'\\);\nconst code = fs.readFileSync\\('node_modules/@xterm/xterm/lib/xterm.js', 'utf8'\\);\nconsole.log\\(code.substring\\(0, 400\\)\\);\n\")"
+      "Bash(node -e \"\nconst fs = require\\('fs'\\);\nconst code = fs.readFileSync\\('node_modules/@xterm/xterm/lib/xterm.js', 'utf8'\\);\nconsole.log\\(code.substring\\(0, 400\\)\\);\n\")",
+      "Bash(make server:*)",
+      "Read(//bin/**)",
+      "Read(//Users/matthewroberts/Library/Application Support/parallelagents-boss-node/repos/a2/**)",
+      "Bash(/bin/zsh -c \"echo test\")",
+      "Bash(node -e:*)",
+      "Bash(node /tmp/test-pty.js:*)",
+      "Bash(node test-pty.js:*)",
+      "Bash(npx:*)",
+      "Bash(node_modules/node-pty/build/Release/spawn-helper)",
+      "Bash(echo:*)",
+      "Bash(xattr:*)",
+      "Bash(timeout 10 npx electron:*)",
+      "Read(//Users/matthewroberts/Library/Application Support/parallelagents-boss-node/**)"
     ]
   }
 }

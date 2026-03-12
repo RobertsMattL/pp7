@@ -59,7 +59,12 @@ function saveAgentConfig(agentName, repoPath, githubUrl) {
 
 function removeAgentConfig(agentName) {
   const saved = loadSavedAgents().filter(a => a.name !== agentName);
+  const dir = path.dirname(AGENTS_FILE());
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
   fs.writeFileSync(AGENTS_FILE(), JSON.stringify(saved, null, 2), 'utf8');
+  console.log(`Removed agent "${agentName}" from saved agents`);
 }
 
 function restoreSavedAgents() {
@@ -685,17 +690,70 @@ function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl, silent =
   }
 }
 
-ipcMain.handle('stop-agent', async (event, agentId) => {
-  const agent = agents.get(agentId);
-  if (agent) {
-    if (agent.process && !agent.process.killed) {
-      agent.process.kill();
+ipcMain.handle('stop-agent', async (event, params) => {
+  // Support both old format (string agentId) and new format (object with agentId and agentName)
+  const agentId = typeof params === 'string' ? params : params.agentId;
+  const agentName = typeof params === 'object' ? params.agentName : null;
+
+  // First try to find by exact ID (for temp agents)
+  let agent = agents.get(agentId);
+  let foundKey = agentId;
+
+  // If not found by ID, try to find by name
+  if (!agent && agentName) {
+    console.log(`Agent with ID ${agentId} not found, searching by name "${agentName}"`);
+    for (const [key, a] of agents) {
+      if (a.name === agentName) {
+        agent = a;
+        foundKey = key;
+        console.log(`Found agent by name: ${agentName} (key: ${foundKey})`);
+        break;
+      }
     }
-    // Remove from persistent config
-    removeAgentConfig(agent.name);
   }
-  agents.delete(agentId);
-  return true;
+
+  // If still not found, we can at least remove from config by name
+  if (!agent) {
+    console.log(`Agent not found in main process (ID: ${agentId}, Name: ${agentName || 'unknown'})`);
+
+    // Clean up terminal if it exists
+    if (terminals.has(agentId)) {
+      terminals.get(agentId).kill();
+      terminals.delete(agentId);
+    }
+
+    // If we have the name, remove from config anyway
+    if (agentName) {
+      console.log(`Removing agent "${agentName}" from config even though process not found`);
+      removeAgentConfig(agentName);
+      return { success: true, removed: true };
+    }
+
+    return { success: false, message: 'Agent not found' };
+  }
+
+  console.log(`Stopping agent "${agent.name}" (${foundKey})`);
+
+  // Kill the agent process
+  if (agent.process && !agent.process.killed) {
+    agent.process.kill();
+  }
+
+  // Kill associated terminal for both the temp ID and real ID
+  if (terminals.has(foundKey)) {
+    terminals.get(foundKey).kill();
+    terminals.delete(foundKey);
+  }
+  if (terminals.has(agentId) && agentId !== foundKey) {
+    terminals.get(agentId).kill();
+    terminals.delete(agentId);
+  }
+
+  // Remove from persistent config so it won't restore on next launch
+  removeAgentConfig(agent.name);
+
+  agents.delete(foundKey);
+  return { success: true };
 });
 
 ipcMain.handle('get-agents', async () => {
@@ -721,30 +779,80 @@ ipcMain.handle('create-terminal', async (event, { agentId, cwd, cols, rows }) =>
     terminals.delete(agentId);
   }
 
-  const shell = process.env.SHELL || '/bin/zsh';
-  const ptyProcess = pty.spawn(shell, [], {
-    name: 'xterm-256color',
-    cols: cols || 80,
-    rows: rows || 24,
-    cwd: cwd || process.env.HOME,
-    env: process.env,
-  });
+  try {
+    const fs = require('fs');
+    const shell = process.env.SHELL || '/bin/zsh';
 
-  ptyProcess.onData((data) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('terminal-data', { agentId, data });
+    // Build a proper environment for the shell
+    const env = Object.assign({}, process.env);
+    env.TERM = 'xterm-256color';
+    if (!env.SHELL) env.SHELL = shell;
+    if (!env.HOME) env.HOME = require('os').homedir();
+    if (!env.PATH) env.PATH = '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
+
+    // Validate cwd exists, fall back to HOME if it doesn't
+    const targetCwd = cwd || env.HOME;
+    if (!fs.existsSync(targetCwd)) {
+      console.warn(`Terminal cwd does not exist: ${targetCwd}, falling back to HOME`);
+      cwd = env.HOME;
     }
-  });
 
-  ptyProcess.onExit(({ exitCode }) => {
-    terminals.delete(agentId);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('terminal-exit', { agentId, exitCode });
+    // Validate shell exists
+    if (!fs.existsSync(shell)) {
+      throw new Error(`Shell not found: ${shell}`);
     }
-  });
 
-  terminals.set(agentId, ptyProcess);
-  return true;
+    console.log(`Creating terminal for agent ${agentId}:`, {
+      shell,
+      cwd: cwd || env.HOME,
+      hasHOME: !!env.HOME,
+      hasPATH: !!env.PATH,
+      shellExists: fs.existsSync(shell),
+      cwdExists: fs.existsSync(cwd || env.HOME),
+      ptyModule: pty.constructor.name,
+      ptyPath: require.resolve('node-pty'),
+    });
+
+    // Try to spawn with explicit error handling
+    let ptyProcess;
+    try {
+      ptyProcess = pty.spawn(shell, [], {
+        name: 'xterm-256color',
+        cols: cols || 80,
+        rows: rows || 24,
+        cwd: cwd || env.HOME,
+        env: env,
+      });
+    } catch (spawnError) {
+      console.error(`PTY spawn failed:`, {
+        error: spawnError.message,
+        stack: spawnError.stack,
+        errno: spawnError.errno,
+        code: spawnError.code,
+      });
+      throw spawnError;
+    }
+
+    ptyProcess.onData((data) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('terminal-data', { agentId, data });
+      }
+    });
+
+    ptyProcess.onExit(({ exitCode }) => {
+      terminals.delete(agentId);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('terminal-exit', { agentId, exitCode });
+      }
+    });
+
+    terminals.set(agentId, ptyProcess);
+    console.log(`Terminal created successfully for agent ${agentId}`);
+    return { success: true };
+  } catch (error) {
+    console.error(`Failed to create terminal for agent ${agentId}:`, error);
+    throw new Error(`Failed to create terminal: ${error.message}`);
+  }
 });
 
 // IPC: Write data to a PTY terminal

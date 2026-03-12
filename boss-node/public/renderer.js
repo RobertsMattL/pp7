@@ -873,9 +873,9 @@ async function closeAgent(agentId) {
   const agent = agents.get(agentId);
   if (!agent) return;
 
-  // Kill the agent process via main process
+  // Kill the agent process via main process (pass both ID and name)
   try {
-    await window.electronAPI.stopAgent(agentId);
+    await window.electronAPI.stopAgent({ agentId, agentName: agent.name });
   } catch (err) {
     console.error('Failed to stop agent process:', err);
   }
@@ -1224,13 +1224,16 @@ document.getElementById('create-agent').addEventListener('click', async () => {
   const agentName = agentNameInput.value.trim();
 
   if (!githubUrl) {
-    alert('Please enter a GitHub repository URL');
+    alert('Please enter a Git repository URL');
     return;
   }
 
-  // Basic URL validation
-  if (!githubUrl.startsWith('http://') && !githubUrl.startsWith('https://')) {
-    alert('Please enter a valid GitHub URL (must start with http:// or https://)');
+  // Basic URL validation - accept HTTP(S) and SSH formats
+  const isHttpUrl = githubUrl.startsWith('http://') || githubUrl.startsWith('https://');
+  const isSshUrl = githubUrl.startsWith('git@') || githubUrl.startsWith('ssh://');
+
+  if (!isHttpUrl && !isSshUrl) {
+    alert('Please enter a valid Git repository URL\n\nSupported formats:\n• https://github.com/user/repo.git\n• git@github.com:user/repo.git\n• ssh://git@github.com/user/repo.git');
     return;
   }
 
