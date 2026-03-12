@@ -28,6 +28,65 @@ function saveConsoles(consoles) {
   fs.writeFileSync(CONSOLES_FILE(), JSON.stringify(consoles, null, 2), 'utf8');
 }
 
+// Agent config persistence
+const AGENTS_FILE = () => path.join(app.getPath('userData'), 'agents.json');
+
+function loadSavedAgents() {
+  try {
+    const data = fs.readFileSync(AGENTS_FILE(), 'utf8');
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+function saveAgentConfig(agentName, repoPath, githubUrl) {
+  const saved = loadSavedAgents();
+  // Update existing or add new
+  const idx = saved.findIndex(a => a.name === agentName);
+  const entry = { name: agentName, repoPath, githubUrl };
+  if (idx >= 0) {
+    saved[idx] = entry;
+  } else {
+    saved.push(entry);
+  }
+  const dir = path.dirname(AGENTS_FILE());
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(AGENTS_FILE(), JSON.stringify(saved, null, 2), 'utf8');
+}
+
+function removeAgentConfig(agentName) {
+  const saved = loadSavedAgents().filter(a => a.name !== agentName);
+  fs.writeFileSync(AGENTS_FILE(), JSON.stringify(saved, null, 2), 'utf8');
+}
+
+function restoreSavedAgents() {
+  const saved = loadSavedAgents();
+  for (const { name, repoPath, githubUrl } of saved) {
+    // Only restore if repo still exists on disk
+    if (!repoPath || !fs.existsSync(repoPath) || !fs.existsSync(path.join(repoPath, '.git'))) {
+      console.log(`Skipping agent "${name}" — repo not found at ${repoPath}`);
+      continue;
+    }
+
+    // Check if already running
+    let alreadyRunning = false;
+    for (const [, agent] of agents) {
+      if (agent.name === name) {
+        alreadyRunning = true;
+        break;
+      }
+    }
+    if (alreadyRunning) continue;
+
+    const tempAgentId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    console.log(`Restoring agent "${name}" from ${repoPath}`);
+    startAgentProcess(tempAgentId, name, repoPath, githubUrl || '', true);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -94,7 +153,13 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  // Restore previously saved agents after window is ready
+  mainWindow.webContents.on('did-finish-load', () => {
+    restoreSavedAgents();
+  });
+});
 
 app.on('window-all-closed', () => {
   // Cleanup all agent processes
@@ -289,21 +354,80 @@ ipcMain.handle('build-and-launch', async (event, { consoleId, deviceSerial, proj
 
         // Try to find and launch the main activity
         try {
-          // Get the package name from the installed APK
-          const launchOutput = execSync(
-            `"${adbPath}" -s ${deviceSerial} shell cmd package resolve-activity --brief -c android.intent.category.LAUNCHER -- $(${adbPath} -s ${deviceSerial} shell pm list packages -3 | tail -1 | cut -d: -f2) | tail -1`,
-            { encoding: 'utf8', timeout: 10000, env }
-          ).trim();
+          // Determine package name from the project's build files
+          let packageName = null;
 
-          if (launchOutput && launchOutput.includes('/')) {
-            execSync(
-              `"${adbPath}" -s ${deviceSerial} shell am start -n ${launchOutput}`,
+          // Try reading applicationId from build.gradle or build.gradle.kts
+          const gradleFiles = [
+            path.join(cwd, 'app', 'build.gradle'),
+            path.join(cwd, 'app', 'build.gradle.kts'),
+            path.join(cwd, 'build.gradle'),
+            path.join(cwd, 'build.gradle.kts'),
+          ];
+          for (const gf of gradleFiles) {
+            if (fs.existsSync(gf)) {
+              const content = fs.readFileSync(gf, 'utf8');
+              // Match applicationId "com.example.app" or applicationId = "com.example.app"
+              const match = content.match(/applicationId\s*[=]?\s*["']([^"']+)["']/);
+              if (match) {
+                packageName = match[1];
+                break;
+              }
+            }
+          }
+
+          // Fallback: try AndroidManifest.xml
+          if (!packageName) {
+            const manifestPaths = [
+              path.join(cwd, 'app', 'src', 'main', 'AndroidManifest.xml'),
+              path.join(cwd, 'src', 'main', 'AndroidManifest.xml'),
+            ];
+            for (const mp of manifestPaths) {
+              if (fs.existsSync(mp)) {
+                const content = fs.readFileSync(mp, 'utf8');
+                const match = content.match(/package="([^"]+)"/);
+                if (match) {
+                  packageName = match[1];
+                  break;
+                }
+              }
+            }
+          }
+
+          if (packageName) {
+            // Resolve the launcher activity for this specific package
+            const launchOutput = execSync(
+              `"${adbPath}" -s ${deviceSerial} shell cmd package resolve-activity --brief -c android.intent.category.LAUNCHER ${packageName} | tail -1`,
               { encoding: 'utf8', timeout: 10000, env }
-            );
+            ).trim();
+
+            if (launchOutput && launchOutput.includes('/')) {
+              execSync(
+                `"${adbPath}" -s ${deviceSerial} shell am start -n ${launchOutput}`,
+                { encoding: 'utf8', timeout: 10000, env }
+              );
+              mainWindow.webContents.send('build-output', {
+                consoleId,
+                output: `App launched: ${launchOutput}\n`,
+                type: 'system',
+              });
+            } else {
+              // Fallback: monkey launch
+              execSync(
+                `"${adbPath}" -s ${deviceSerial} shell monkey -p ${packageName} -c android.intent.category.LAUNCHER 1`,
+                { encoding: 'utf8', timeout: 10000, env }
+              );
+              mainWindow.webContents.send('build-output', {
+                consoleId,
+                output: `App launched via monkey: ${packageName}\n`,
+                type: 'system',
+              });
+            }
+          } else {
             mainWindow.webContents.send('build-output', {
               consoleId,
-              output: `App launched: ${launchOutput}\n`,
-              type: 'system',
+              output: `Build installed but could not determine package name to auto-launch.\n`,
+              type: 'default',
             });
           }
         } catch (launchErr) {
@@ -487,14 +611,22 @@ ipcMain.handle('clone-and-start-agent', async (event, config) => {
   }
 });
 
-function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl) {
+function sendToRenderer(channel, data) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, data);
+  }
+}
+
+function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl, silent = false) {
   const agentBinaryPath = path.join(__dirname, '../../bin/parallelagents-agent');
 
-  mainWindow.webContents.send('agent-output', {
-    agentId: tempAgentId,
-    output: `Starting agent "${agentName}" in ${repoPath}...\n`,
-    type: 'system',
-  });
+  if (!silent) {
+    sendToRenderer('agent-output', {
+      agentId: tempAgentId,
+      output: `Starting agent "${agentName}" in ${repoPath}...\n`,
+      type: 'system',
+    });
+  }
 
   const agentProcess = spawn(agentBinaryPath, [
     '-name', agentName,
@@ -515,7 +647,7 @@ function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl) {
 
   agentProcess.on('error', (err) => {
     console.error(`Failed to start agent: ${err.message}`);
-    mainWindow.webContents.send('agent-output', {
+    sendToRenderer('agent-output', {
       agentId: tempAgentId,
       output: `\n✗ Failed to start agent: ${err.message}\n`,
       type: 'error',
@@ -535,23 +667,32 @@ function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl) {
     process: agentProcess,
   });
 
-  mainWindow.webContents.send('agent-output', {
-    agentId: tempAgentId,
-    output: `✓ Agent process started. Connecting to server...\n`,
-    type: 'system',
-  });
+  // Persist agent config for restart
+  saveAgentConfig(agentName, repoPath, githubUrl);
 
-  mainWindow.webContents.send('agent-output', {
-    agentId: tempAgentId,
-    output: `Agent will appear in the UI once connected to the server.\n`,
-    type: 'system',
-  });
+  if (!silent) {
+    sendToRenderer('agent-output', {
+      agentId: tempAgentId,
+      output: `✓ Agent process started. Connecting to server...\n`,
+      type: 'system',
+    });
+
+    sendToRenderer('agent-output', {
+      agentId: tempAgentId,
+      output: `Agent will appear in the UI once connected to the server.\n`,
+      type: 'system',
+    });
+  }
 }
 
 ipcMain.handle('stop-agent', async (event, agentId) => {
   const agent = agents.get(agentId);
-  if (agent && agent.process && !agent.process.killed) {
-    agent.process.kill();
+  if (agent) {
+    if (agent.process && !agent.process.killed) {
+      agent.process.kill();
+    }
+    // Remove from persistent config
+    removeAgentConfig(agent.name);
   }
   agents.delete(agentId);
   return true;
