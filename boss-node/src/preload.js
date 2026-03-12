@@ -5,6 +5,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   cloneAndStartAgent: (config) => ipcRenderer.invoke('clone-and-start-agent', config),
   getAgents: () => ipcRenderer.invoke('get-agents'),
+  stopAgent: (agentId) => ipcRenderer.invoke('stop-agent', agentId),
   sendPromptToAgent: (data) => ipcRenderer.invoke('send-prompt-to-agent', data),
 
   // ADB device management

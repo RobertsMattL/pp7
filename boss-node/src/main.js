@@ -368,8 +368,8 @@ ipcMain.handle('clone-and-start-agent', async (event, config) => {
       fs.mkdirSync(reposDir, { recursive: true });
     }
 
-    // Use a stable directory name based on repo name (no timestamp)
-    const repoPath = path.join(reposDir, repoName);
+    // Use the agent name as the directory name (falls back to repo name)
+    const repoPath = path.join(reposDir, finalAgentName);
 
     const timestamp = Date.now();
     const tempAgentId = `temp-${timestamp}`;
@@ -507,6 +507,15 @@ function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl) {
     type: 'system',
   });
 }
+
+ipcMain.handle('stop-agent', async (event, agentId) => {
+  const agent = agents.get(agentId);
+  if (agent && agent.process && !agent.process.killed) {
+    agent.process.kill();
+  }
+  agents.delete(agentId);
+  return true;
+});
 
 ipcMain.handle('get-agents', async () => {
   return Array.from(agents.values()).map(agent => ({

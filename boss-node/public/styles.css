@@ -269,6 +269,26 @@ body {
   opacity: 0.6;
 }
 
+.close-agent-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: none;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.close-agent-btn:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+}
+
 .play-btn.building {
   background-color: var(--accent-yellow);
   animation: pulse-build 1s infinite;

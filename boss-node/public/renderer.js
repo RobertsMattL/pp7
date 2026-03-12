@@ -579,6 +579,11 @@ function createAgentConsole(agentId) {
               <path d="M8 5v14l11-7z"/>
             </svg>
           </button>
+          <button class="close-agent-btn" id="close-${agentId}" title="Close Agent">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
         </div>
       ` : ''}
     </div>
@@ -653,6 +658,12 @@ function createAgentConsole(agentId) {
     playBtn.addEventListener('click', () => {
       handlePlay(agentId);
     });
+
+    // Close button
+    const closeBtn = document.getElementById(`close-${agentId}`);
+    closeBtn.addEventListener('click', () => {
+      closeAgent(agentId);
+    });
   }
 
   // Refresh global git status panel
@@ -717,6 +728,38 @@ async function refreshGlobalGitInfo() {
   }).join('');
 
   panel.classList.add('visible');
+}
+
+async function closeAgent(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent) return;
+
+  // Kill the agent process via main process
+  try {
+    await window.electronAPI.stopAgent(agentId);
+  } catch (err) {
+    console.error('Failed to stop agent process:', err);
+  }
+
+  // Clean up typewriter state
+  flushTypewriter(agentId);
+  typewriterQueues.delete(agentId);
+
+  // Remove from UI and state
+  removeAgentConsole(agentId);
+  agents.delete(agentId);
+
+  // Update count
+  const realAgentCount = Array.from(agents.values()).filter(a => !a.isTemp).length;
+  agentCountEl.textContent = `${realAgentCount} Agent${realAgentCount !== 1 ? 's' : ''}`;
+
+  // Show empty state if needed
+  if (agents.size === 0) {
+    noAgentsView.style.display = 'flex';
+  }
+
+  // Refresh git panel
+  refreshGlobalGitInfo();
 }
 
 function removeAgentConsole(agentId) {
