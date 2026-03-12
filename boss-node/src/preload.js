@@ -7,12 +7,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAgents: () => ipcRenderer.invoke('get-agents'),
   sendPromptToAgent: (data) => ipcRenderer.invoke('send-prompt-to-agent', data),
 
+  // ADB device management
+  getAdbDevices: () => ipcRenderer.invoke('get-adb-devices'),
+
+  // Console persistence
+  loadConsoles: () => ipcRenderer.invoke('load-consoles'),
+  saveConsoles: (consoles) => ipcRenderer.invoke('save-consoles', consoles),
+
+  // Build and launch
+  buildAndLaunch: (data) => ipcRenderer.invoke('build-and-launch', data),
+
+  // Git info
+  getGitInfo: (repoPath) => ipcRenderer.invoke('get-git-info', repoPath),
+
   // Listeners for events from main process
   onAgentOutput: (callback) => {
     ipcRenderer.on('agent-output', (event, data) => callback(data));
   },
   onShowAgentConfigDialog: (callback) => {
     ipcRenderer.on('show-agent-config-dialog', () => callback());
+  },
+  onBuildOutput: (callback) => {
+    ipcRenderer.on('build-output', (event, data) => callback(data));
   },
 
   // Cleanup

@@ -34,6 +34,7 @@ type Envelope struct {
 type Register struct {
 	AgentID string `json:"agent_id"`
 	Name    string `json:"name"`
+	WorkDir string `json:"workdir,omitempty"`
 }
 
 // AgentInfo describes a single agent in the agent list.
@@ -41,6 +42,7 @@ type AgentInfo struct {
 	AgentID string `json:"agent_id"`
 	Name    string `json:"name"`
 	Status  string `json:"status"`
+	WorkDir string `json:"workdir,omitempty"`
 }
 
 // AgentList is sent by the server to the boss with current agents.

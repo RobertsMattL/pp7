@@ -1,8 +1,18 @@
 // WebSocket connection state
 let ws = null;
 let isConnected = false;
-const agents = new Map(); // agentId -> { name, status, output, currentPrompt }
+const agents = new Map(); // agentId -> { name, status, output, currentPrompt, deviceSerial }
 const WS_URL = 'ws://localhost:8080/ws/boss';
+
+// ADB device state
+let adbDevices = []; // Array of { serial, state, model, product }
+let devicePollInterval = null;
+
+// Typewriter system: per-agent queue of text chunks to animate
+const typewriterQueues = new Map(); // agentId -> { queue: [], typing: bool, lineEl: null, cursorEl: null }
+
+// Device assignments persisted by agent name (since agent IDs change between sessions)
+let deviceAssignments = {}; // { agentName: deviceSerial }
 
 // UI Elements
 const mainContent = document.getElementById('main-content');
@@ -12,6 +22,164 @@ const agentCountEl = document.getElementById('agent-count');
 const dialog = document.getElementById('agent-config-dialog');
 const githubUrlInput = document.getElementById('github-url');
 const agentNameInput = document.getElementById('agent-name');
+
+// Initialize
+async function init() {
+  // Load cached device assignments
+  const cached = await window.electronAPI.loadConsoles();
+  if (cached && typeof cached === 'object' && !Array.isArray(cached)) {
+    deviceAssignments = cached;
+  } else if (Array.isArray(cached)) {
+    // Migrate old format: extract device assignments by name
+    cached.forEach(c => {
+      if (c.name && c.deviceSerial) {
+        deviceAssignments[c.name] = c.deviceSerial;
+      }
+    });
+    persistDeviceAssignments();
+  }
+
+  // Start polling for ADB devices
+  await pollAdbDevices();
+  devicePollInterval = setInterval(pollAdbDevices, 3000);
+
+  // Poll git status every 10 seconds
+  setInterval(refreshGlobalGitInfo, 10000);
+
+  // Connect WebSocket
+  connectWebSocket();
+}
+
+// ADB Device Polling
+async function pollAdbDevices() {
+  try {
+    adbDevices = await window.electronAPI.getAdbDevices();
+    updateAllAgentDeviceUI();
+  } catch (err) {
+    console.error('Failed to poll ADB devices:', err);
+  }
+}
+
+function isDeviceOnline(serial) {
+  if (!serial) return false;
+  const device = adbDevices.find(d => d.serial === serial);
+  return device && device.state === 'device';
+}
+
+function updateAllAgentDeviceUI() {
+  for (const [agentId, agent] of agents) {
+    if (agent.isTemp) continue;
+    updateDeviceStatus(agentId);
+    updateDeviceDropdown(agentId);
+    updatePlayButton(agentId);
+  }
+}
+
+function updateDeviceStatus(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent) return;
+
+  const consoleDiv = document.getElementById(`console-${agentId}`);
+  if (!consoleDiv) return;
+
+  const statusDot = consoleDiv.querySelector('.device-status-dot');
+  const serialSpan = consoleDiv.querySelector('.device-serial-text');
+  if (!statusDot || !serialSpan) return;
+
+  const serial = agent.deviceSerial;
+  if (serial) {
+    const online = isDeviceOnline(serial);
+    statusDot.className = `device-status-dot ${online ? 'online' : 'offline'}`;
+    statusDot.title = online ? 'Device online' : 'Device offline';
+    serialSpan.textContent = serial;
+    serialSpan.className = `device-serial-text ${online ? 'online' : 'offline'}`;
+  } else {
+    statusDot.className = 'device-status-dot no-device';
+    statusDot.title = 'No device assigned';
+    serialSpan.textContent = 'No device';
+    serialSpan.className = 'device-serial-text no-device';
+  }
+}
+
+function updateDeviceDropdown(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent) return;
+
+  const select = document.getElementById(`device-select-${agentId}`);
+  if (!select) return;
+
+  const currentSerial = agent.deviceSerial;
+
+  select.innerHTML = '<option value="">-- Select Device --</option>';
+
+  adbDevices.forEach(device => {
+    const option = document.createElement('option');
+    option.value = device.serial;
+    const stateLabel = device.state === 'device' ? '' : ` (${device.state})`;
+    option.textContent = `${device.model} [${device.serial}]${stateLabel}`;
+    if (device.serial === currentSerial) {
+      option.selected = true;
+    }
+    select.appendChild(option);
+  });
+
+  // If the current serial is set but not in the list, add it as disconnected
+  if (currentSerial && !adbDevices.find(d => d.serial === currentSerial)) {
+    const option = document.createElement('option');
+    option.value = currentSerial;
+    option.textContent = `${currentSerial} (disconnected)`;
+    option.selected = true;
+    select.appendChild(option);
+  }
+}
+
+function updatePlayButton(agentId) {
+  const agent = agents.get(agentId);
+  const playBtn = document.getElementById(`play-${agentId}`);
+  if (!playBtn || !agent) return;
+
+  const hasDevice = agent.deviceSerial && isDeviceOnline(agent.deviceSerial);
+  const hasRepoPath = !!agent.repoPath;
+  playBtn.disabled = !(hasDevice && hasRepoPath);
+}
+
+function persistDeviceAssignments() {
+  window.electronAPI.saveConsoles(deviceAssignments);
+}
+
+async function handlePlay(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent || !agent.deviceSerial || !agent.repoPath) return;
+
+  const playBtn = document.getElementById(`play-${agentId}`);
+  if (playBtn) {
+    playBtn.disabled = true;
+    playBtn.classList.add('building');
+  }
+
+  appendToConsole(agentId, 'Starting build...', 'system');
+
+  try {
+    await window.electronAPI.buildAndLaunch({
+      consoleId: agentId,
+      deviceSerial: agent.deviceSerial,
+      projectPath: agent.repoPath,
+    });
+  } catch (err) {
+    appendToConsole(agentId, `Build error: ${err.message}`, 'error');
+  }
+
+  if (playBtn) {
+    playBtn.classList.remove('building');
+    updatePlayButton(agentId);
+  }
+}
+
+// Listen for build output from main process
+window.electronAPI.onBuildOutput((data) => {
+  const { consoleId, output, type } = data;
+  appendToConsole(consoleId, output, type);
+});
 
 // WebSocket Connection
 function connectWebSocket() {
@@ -119,6 +287,9 @@ function handleAgentList(agentList) {
         }
       }
 
+      // Restore cached device assignment by agent name
+      const cachedSerial = deviceAssignments[agentInfo.name] || null;
+
       if (tempAgent) {
         // Migrate temp agent to real agent
         console.log(`Migrating temp agent ${tempAgent.id} to real agent ${agentInfo.agent_id}`);
@@ -127,17 +298,22 @@ function handleAgentList(agentList) {
         const tempOutputDiv = document.getElementById(`output-${tempAgent.id}`);
         const tempOutput = tempOutputDiv ? Array.from(tempOutputDiv.children) : [];
 
+        // Get repoPath from temp agent
+        const repoPath = tempAgent.agent.repoPath || null;
+
         // Remove temp console
         removeAgentConsole(tempAgent.id);
         agents.delete(tempAgent.id);
 
-        // Create new agent
+        // Create new agent with device info
         agents.set(agentInfo.agent_id, {
           id: agentInfo.agent_id,
           name: agentInfo.name,
           status: agentInfo.status,
           output: [],
           currentPrompt: '',
+          deviceSerial: cachedSerial,
+          repoPath: repoPath,
         });
         createAgentConsole(agentInfo.agent_id);
 
@@ -157,6 +333,8 @@ function handleAgentList(agentList) {
           status: agentInfo.status,
           output: [],
           currentPrompt: '',
+          deviceSerial: cachedSerial,
+          repoPath: agentInfo.workdir || null,
         });
         createAgentConsole(agentInfo.agent_id);
       }
@@ -166,12 +344,15 @@ function handleAgentList(agentList) {
       if (!agent.isTemp) {
         agent.name = agentInfo.name;
         agent.status = agentInfo.status;
+        if (agentInfo.workdir && !agent.repoPath) {
+          agent.repoPath = agentInfo.workdir;
+        }
         updateAgentConsoleHeader(agentInfo.agent_id);
       }
     }
   });
 
-  // Count non-temp agents
+  // Update count
   const realAgentCount = Array.from(agents.values()).filter(a => !a.isTemp).length;
   agentCountEl.textContent = `${realAgentCount} Agent${realAgentCount !== 1 ? 's' : ''}`;
 
@@ -181,6 +362,9 @@ function handleAgentList(agentList) {
   } else {
     noAgentsView.style.display = 'none';
   }
+
+  // Refresh global git info whenever agent list changes
+  refreshGlobalGitInfo();
 }
 
 function updateAgentStatus(agentId, status) {
@@ -196,8 +380,6 @@ function handleProgressMessage(progress) {
 
   if (is_final) {
     appendToConsole(agent_id, '[DONE]', 'done');
-    // Clear pinned prompt after task completes
-    // Actually, keep it to show last task - as per Go implementation
   } else {
     const parsedLine = parseProgressLine(line);
     if (parsedLine.text) {
@@ -378,14 +560,42 @@ function createAgentConsole(agentId) {
   const placeholder = agent.isTemp
     ? 'Waiting for agent to connect...'
     : 'Type a prompt and press Enter...';
+  const isTemp = agent.isTemp;
 
   consoleDiv.innerHTML = `
     <div class="console-header">
       <div class="console-title">
         <span class="console-name">${escapeHtml(agent.name)}</span>
         <span class="console-status ${agent.status}">${agent.status.toUpperCase()}</span>
+        ${!isTemp ? `
+          <span class="device-status-dot no-device" title="No device assigned"></span>
+          <span class="device-serial-text no-device">No device</span>
+        ` : ''}
       </div>
+      ${!isTemp ? `
+        <div class="console-actions">
+          <button class="play-btn" id="play-${agentId}" title="Build & Launch" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M8 5v14l11-7z"/>
+            </svg>
+          </button>
+        </div>
+      ` : ''}
     </div>
+    ${!isTemp ? `
+      <div class="device-assignment">
+        <label>Device:</label>
+        <select id="device-select-${agentId}" class="device-select">
+          <option value="">-- Select Device --</option>
+        </select>
+        <button class="refresh-btn" title="Refresh devices">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6M1 20v-6h6"/>
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+          </svg>
+        </button>
+      </div>
+    ` : ''}
     <div class="pinned-prompt hidden" id="prompt-${agentId}"></div>
     <div class="console-output" id="output-${agentId}"></div>
     <div class="console-input-container">
@@ -410,6 +620,103 @@ function createAgentConsole(agentId) {
       sendPrompt(agentId);
     }
   });
+
+  // Set up device UI for non-temp agents
+  if (!isTemp) {
+    // Populate device dropdown
+    updateDeviceDropdown(agentId);
+    updateDeviceStatus(agentId);
+    updatePlayButton(agentId);
+
+    // Device selection change
+    const select = document.getElementById(`device-select-${agentId}`);
+    select.addEventListener('change', () => {
+      agent.deviceSerial = select.value || null;
+      // Persist by agent name
+      if (agent.deviceSerial) {
+        deviceAssignments[agent.name] = agent.deviceSerial;
+      } else {
+        delete deviceAssignments[agent.name];
+      }
+      persistDeviceAssignments();
+      updateDeviceStatus(agentId);
+      updatePlayButton(agentId);
+    });
+
+    // Refresh button
+    consoleDiv.querySelector('.refresh-btn').addEventListener('click', () => {
+      pollAdbDevices();
+    });
+
+    // Play button
+    const playBtn = document.getElementById(`play-${agentId}`);
+    playBtn.addEventListener('click', () => {
+      handlePlay(agentId);
+    });
+  }
+
+  // Refresh global git status panel
+  refreshGlobalGitInfo();
+}
+
+async function refreshGlobalGitInfo() {
+  const panel = document.getElementById('git-status-panel');
+  if (!panel) return;
+
+  // Collect all non-temp agents with repo paths
+  const agentEntries = [];
+  for (const [agentId, agent] of agents) {
+    if (!agent.isTemp && agent.repoPath) {
+      agentEntries.push({ agentId, agent });
+    }
+  }
+
+  if (agentEntries.length === 0) {
+    panel.innerHTML = '';
+    panel.classList.remove('visible');
+    return;
+  }
+
+  // Fetch git info for all agents in parallel
+  const results = await Promise.all(
+    agentEntries.map(async ({ agentId, agent }) => {
+      try {
+        const info = await window.electronAPI.getGitInfo(agent.repoPath);
+        return { agentId, name: agent.name, info };
+      } catch {
+        return { agentId, name: agent.name, info: null };
+      }
+    })
+  );
+
+  const validResults = results.filter(r => r.info);
+  if (validResults.length === 0) {
+    panel.innerHTML = '';
+    panel.classList.remove('visible');
+    return;
+  }
+
+  // Determine if all agents share the same commit hash and are clean
+  const allSameHash = validResults.every(r => r.info.hash === validResults[0].info.hash);
+  const allClean = validResults.every(r => !r.info.dirty);
+  const allGreen = allSameHash && allClean;
+
+  // Build rows
+  panel.innerHTML = validResults.map(({ name, info }) => {
+    const hashClass = allGreen ? 'git-hash synced' : (info.dirty ? 'git-hash dirty' : 'git-hash');
+    const dirtyBadge = info.dirty
+      ? `<span class="git-dirty">${info.changedFiles} change${info.changedFiles !== 1 ? 's' : ''}</span>`
+      : '';
+    return `<div class="git-status-row">
+      <span class="git-agent-name">${escapeHtml(name)}</span>
+      <span class="git-branch">${escapeHtml(info.branch)}</span>
+      <span class="${hashClass}">${escapeHtml(info.hash)}</span>
+      ${dirtyBadge}
+      <span class="git-message">${escapeHtml(info.message)}</span>
+    </div>`;
+  }).join('');
+
+  panel.classList.add('visible');
 }
 
 function removeAgentConsole(agentId) {
@@ -448,6 +755,8 @@ function appendToConsole(agentId, text, type = 'default') {
       output: [],
       currentPrompt: '',
       isTemp: true,
+      deviceSerial: null,
+      repoPath: null,
     };
     agents.set(agentId, agent);
     noAgentsView.style.display = 'none';
@@ -460,19 +769,185 @@ function appendToConsole(agentId, text, type = 'default') {
   const outputDiv = document.getElementById(`output-${agentId}`);
   if (!outputDiv) return;
 
+  // Use typewriter animation for Claude's text output (default type from assistant/deltas)
+  if (type === 'default' && text && !agent.isTemp) {
+    enqueueTypewriter(agentId, outputDiv, text);
+    return;
+  }
+
+  // Flush any pending typewriter text before appending a non-default line
+  flushTypewriter(agentId);
+
+  // Instant append for non-default types (system, error, tool, user, etc.)
   const line = document.createElement('div');
   line.className = `console-line ${type}`;
   line.textContent = text;
 
   outputDiv.appendChild(line);
-
-  // Auto-scroll to bottom
   outputDiv.scrollTop = outputDiv.scrollHeight;
 
   // Keep only last 1000 lines
   while (outputDiv.children.length > 1000) {
     outputDiv.removeChild(outputDiv.firstChild);
   }
+}
+
+// --- Typewriter Animation System ---
+function getTypewriterState(agentId) {
+  if (!typewriterQueues.has(agentId)) {
+    typewriterQueues.set(agentId, {
+      queue: [],
+      typing: false,
+      lineEl: null,
+      cursorEl: null,
+    });
+  }
+  return typewriterQueues.get(agentId);
+}
+
+function enqueueTypewriter(agentId, outputDiv, text) {
+  const state = getTypewriterState(agentId);
+  state.queue.push({ outputDiv, text });
+
+  if (!state.typing) {
+    processTypewriterQueue(agentId);
+  }
+}
+
+function processTypewriterQueue(agentId) {
+  const state = getTypewriterState(agentId);
+  if (state.queue.length === 0) {
+    state.typing = false;
+    // Remove cursor when done
+    if (state.cursorEl && state.cursorEl.parentNode) {
+      state.cursorEl.remove();
+    }
+    // Remove typing class from line
+    if (state.lineEl) {
+      state.lineEl.classList.remove('typing');
+    }
+    state.lineEl = null;
+    state.cursorEl = null;
+    return;
+  }
+
+  state.typing = true;
+  const { outputDiv, text } = state.queue.shift();
+
+  // If we don't have an active line, create one
+  if (!state.lineEl) {
+    state.lineEl = document.createElement('div');
+    state.lineEl.className = 'console-line default typing';
+    outputDiv.appendChild(state.lineEl);
+
+    state.cursorEl = document.createElement('span');
+    state.cursorEl.className = 'typewriter-cursor';
+    state.lineEl.appendChild(state.cursorEl);
+  }
+
+  // Check if text contains newlines — if so, we need to handle line breaks
+  const chars = [...text];
+  let charIndex = 0;
+
+  // Determine typing speed based on queue backlog (speed up if lots queued)
+  const baseSpeed = 12;
+  const speedMultiplier = Math.max(1, Math.min(state.queue.length, 10));
+  const charsPerTick = Math.ceil(speedMultiplier);
+
+  function typeNext() {
+    if (charIndex >= chars.length) {
+      // Done with this chunk, process next in queue
+      processTypewriterQueue(agentId);
+      return;
+    }
+
+    // Type multiple chars per tick if backlog exists
+    let charsToAdd = '';
+    for (let i = 0; i < charsPerTick && charIndex < chars.length; i++, charIndex++) {
+      const char = chars[charIndex];
+      if (char === '\n') {
+        // Finish current line, start a new one
+        if (charsToAdd) {
+          // Insert text before cursor
+          const textNode = document.createTextNode(charsToAdd);
+          state.lineEl.insertBefore(textNode, state.cursorEl);
+          charsToAdd = '';
+        }
+
+        // Remove cursor and typing class from current line
+        state.lineEl.classList.remove('typing');
+        if (state.cursorEl.parentNode) {
+          state.cursorEl.remove();
+        }
+
+        // Create new line
+        state.lineEl = document.createElement('div');
+        state.lineEl.className = 'console-line default typing';
+        outputDiv.appendChild(state.lineEl);
+        state.lineEl.appendChild(state.cursorEl);
+
+        // Trim lines
+        while (outputDiv.children.length > 1000) {
+          outputDiv.removeChild(outputDiv.firstChild);
+        }
+      } else {
+        charsToAdd += char;
+      }
+    }
+
+    // Insert accumulated text before cursor
+    if (charsToAdd) {
+      const textNode = document.createTextNode(charsToAdd);
+      state.lineEl.insertBefore(textNode, state.cursorEl);
+    }
+
+    // Auto-scroll
+    outputDiv.scrollTop = outputDiv.scrollHeight;
+
+    // Schedule next tick
+    const speed = Math.max(2, baseSpeed / speedMultiplier);
+    setTimeout(typeNext, speed);
+  }
+
+  typeNext();
+}
+
+// Flush typewriter instantly (e.g., when a non-default line interrupts)
+function flushTypewriter(agentId) {
+  const state = getTypewriterState(agentId);
+  if (!state.typing && state.queue.length === 0) return;
+
+  // Instantly render all queued text
+  for (const { outputDiv, text } of state.queue) {
+    if (!state.lineEl) {
+      state.lineEl = document.createElement('div');
+      state.lineEl.className = 'console-line default';
+      outputDiv.appendChild(state.lineEl);
+    }
+
+    const lines = text.split('\n');
+    lines.forEach((lineText, i) => {
+      if (i > 0) {
+        state.lineEl = document.createElement('div');
+        state.lineEl.className = 'console-line default';
+        outputDiv.appendChild(state.lineEl);
+      }
+      if (lineText) {
+        state.lineEl.appendChild(document.createTextNode(lineText));
+      }
+    });
+  }
+
+  state.queue = [];
+  state.typing = false;
+  if (state.cursorEl && state.cursorEl.parentNode) {
+    state.cursorEl.remove();
+  }
+  if (state.lineEl) {
+    state.lineEl.classList.remove('typing');
+  }
+  state.lineEl = null;
+  state.cursorEl = null;
 }
 
 function sendPrompt(agentId) {
@@ -530,27 +1005,33 @@ function generateUUID() {
 
 function escapeHtml(text) {
   const div = document.createElement('div');
-  div.textContent = text;
+  div.textContent = text || '';
   return div.innerHTML;
+}
+
+function showAgentDialog() {
+  dialog.style.display = 'flex';
+  githubUrlInput.focus();
+}
+
+function hideAgentDialog() {
+  dialog.style.display = 'none';
+  githubUrlInput.value = '';
+  agentNameInput.value = '';
 }
 
 // Dialog handlers
 window.electronAPI.onShowAgentConfigDialog(() => {
-  dialog.style.display = 'flex';
-  githubUrlInput.focus();
+  showAgentDialog();
 });
 
-document.getElementById('close-dialog').addEventListener('click', () => {
-  dialog.style.display = 'none';
-  githubUrlInput.value = '';
-  agentNameInput.value = '';
+// "+ Agent" button opens the same dialog
+document.getElementById('add-agent-btn').addEventListener('click', () => {
+  showAgentDialog();
 });
 
-document.getElementById('cancel-dialog').addEventListener('click', () => {
-  dialog.style.display = 'none';
-  githubUrlInput.value = '';
-  agentNameInput.value = '';
-});
+document.getElementById('close-dialog').addEventListener('click', hideAgentDialog);
+document.getElementById('cancel-dialog').addEventListener('click', hideAgentDialog);
 
 document.getElementById('create-agent').addEventListener('click', async () => {
   const githubUrl = githubUrlInput.value.trim();
@@ -568,7 +1049,7 @@ document.getElementById('create-agent').addEventListener('click', async () => {
   }
 
   // Close dialog
-  dialog.style.display = 'none';
+  hideAgentDialog();
 
   try {
     // Call main process to clone repo
@@ -579,26 +1060,31 @@ document.getElementById('create-agent').addEventListener('click', async () => {
 
     console.log('Agent created:', result);
 
-    // Update the temp agent's name if it exists
+    // If duplicate name or other error with no temp agent created
+    if (result.error && !result.agentId) {
+      alert(result.error);
+      return;
+    }
+
+    // Update the temp agent's name and repoPath
     const tempAgentId = result.agentId;
     const tempAgent = agents.get(tempAgentId);
     if (tempAgent) {
       tempAgent.name = result.agentName;
+      tempAgent.repoPath = result.repoPath;
       updateAgentConsoleHeader(tempAgentId);
     }
 
-    // Note: The console was already created when git output started streaming.
-    // The real agent console will be created when it connects to the server
-    // and appears in the agent_list.
+    // If clone failed, don't proceed further
+    if (result.error) {
+      console.error('Clone failed:', result.error);
+      return;
+    }
 
   } catch (error) {
     console.error('Failed to create agent:', error);
     alert(`Failed to create agent: ${error.message}`);
   }
-
-  // Clear inputs
-  githubUrlInput.value = '';
-  agentNameInput.value = '';
 });
 
 // Listen for agent output from main process
@@ -607,5 +1093,5 @@ window.electronAPI.onAgentOutput((data) => {
   appendToConsole(agentId, output, type);
 });
 
-// Initialize WebSocket connection
-connectWebSocket();
+// Initialize
+init();

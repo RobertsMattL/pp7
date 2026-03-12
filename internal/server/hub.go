@@ -34,6 +34,7 @@ type Client struct {
 	agentID string
 	name    string
 	status  string
+	workdir string
 
 	isBoss bool
 }
@@ -112,6 +113,7 @@ func (h *Hub) registerAgent(c *Client, reg *protocol.Register) {
 	c.agentID = reg.AgentID
 	c.name = reg.Name
 	c.status = protocol.StatusIdle
+	c.workdir = reg.WorkDir
 
 	h.mu.Lock()
 	h.agents[c.agentID] = c
@@ -154,6 +156,7 @@ func (h *Hub) sendAgentListToBoss() {
 			AgentID: a.agentID,
 			Name:    a.name,
 			Status:  a.status,
+			WorkDir: a.workdir,
 		})
 	}
 	h.mu.RUnlock()

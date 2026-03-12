@@ -20,15 +20,19 @@
       </div>
       <div class="header-info">
         <span id="agent-count">0 Agents</span>
+        <button class="add-agent-btn" id="add-agent-btn" title="Create Agent">+ Agent</button>
       </div>
     </header>
+
+    <!-- Global Git Status Panel -->
+    <div id="git-status-panel" class="git-status-panel"></div>
 
     <!-- Main Content Area -->
     <main class="main-content" id="main-content">
       <div class="no-agents" id="no-agents">
         <div class="no-agents-message">
           <h2>No Agents Connected</h2>
-          <p>Use <strong>File → New Agent from GitHub</strong> to clone a repository and start an agent.</p>
+          <p>Click <strong>+ Agent</strong> or use <strong>File &rarr; New Agent from GitHub</strong> to clone a repository and start an agent.</p>
         </div>
       </div>
       <!-- Agent consoles will be dynamically added here -->

@@ -124,6 +124,7 @@ func (a *Agent) connectAndServe(ctx context.Context) error {
 		Register: &protocol.Register{
 			AgentID: a.id,
 			Name:    a.name,
+			WorkDir: a.workdir,
 		},
 	}); err != nil {
 		return fmt.Errorf("register: %w", err)
