@@ -21,6 +21,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Git info
   getGitInfo: (repoPath) => ipcRenderer.invoke('get-git-info', repoPath),
 
+  // Terminal
+  createTerminal: (data) => ipcRenderer.invoke('create-terminal', data),
+  writeTerminal: (data) => ipcRenderer.invoke('write-terminal', data),
+  resizeTerminal: (data) => ipcRenderer.invoke('resize-terminal', data),
+  destroyTerminal: (agentId) => ipcRenderer.invoke('destroy-terminal', agentId),
+  onTerminalData: (callback) => {
+    ipcRenderer.on('terminal-data', (event, data) => callback(data));
+  },
+  onTerminalExit: (callback) => {
+    ipcRenderer.on('terminal-exit', (event, data) => callback(data));
+  },
+
   // Listeners for events from main process
   onAgentOutput: (callback) => {
     ipcRenderer.on('agent-output', (event, data) => callback(data));

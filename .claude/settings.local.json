@@ -26,7 +26,16 @@
       "Bash(ps:*)",
       "Bash(mkdir:*)",
       "Bash(npm install)",
-      "Bash(/Users/matthewroberts/development/projects/pp7/bin/parallelagents-agent:*)"
+      "Bash(/Users/matthewroberts/development/projects/pp7/bin/parallelagents-agent:*)",
+      "Bash(cd /Users/matthewroberts/development/projects/ParallelAgents/boss-node && npm install node-pty @xterm/xterm @xterm/addon-fit)",
+      "Bash(npx electron-rebuild:*)",
+      "Bash(DEBUG=electron-rebuild npx electron-rebuild -m . 2>&1 | tail -40)",
+      "Bash(python3 --version && pip3 install setuptools 2>&1 | tail -5)",
+      "Bash(pip3 install:*)",
+      "Bash(timeout 8 npx electron . 2>&1 || true)",
+      "Bash(node -e \"const m = require\\('@xterm/addon-fit'\\); console.log\\(Object.keys\\(m\\)\\);\")",
+      "Bash(node -e \"\nconst fs = require\\('fs'\\);\nconst code = fs.readFileSync\\('node_modules/@xterm/addon-fit/lib/addon-fit.js', 'utf8'\\);\n// Check the UMD wrapper\nconsole.log\\(code.substring\\(0, 300\\)\\);\n\")",
+      "Bash(node -e \"\nconst fs = require\\('fs'\\);\nconst code = fs.readFileSync\\('node_modules/@xterm/xterm/lib/xterm.js', 'utf8'\\);\nconsole.log\\(code.substring\\(0, 400\\)\\);\n\")"
     ]
   }
 }

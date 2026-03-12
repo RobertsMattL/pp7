@@ -14,6 +14,10 @@ const typewriterQueues = new Map(); // agentId -> { queue: [], typing: bool, lin
 // Device assignments persisted by agent name (since agent IDs change between sessions)
 let deviceAssignments = {}; // { agentName: deviceSerial }
 
+// Tab and terminal state
+let activeTab = 'agents'; // 'agents' or agentId
+const agentTerminals = new Map(); // agentId -> { terminal: Terminal, fitAddon: FitAddon, created: bool }
+
 // UI Elements
 const mainContent = document.getElementById('main-content');
 const noAgentsView = document.getElementById('no-agents');
@@ -22,6 +26,8 @@ const agentCountEl = document.getElementById('agent-count');
 const dialog = document.getElementById('agent-config-dialog');
 const githubUrlInput = document.getElementById('github-url');
 const agentNameInput = document.getElementById('agent-name');
+const tabBar = document.getElementById('tab-bar');
+const terminalContainer = document.getElementById('terminal-container');
 
 // Initialize
 async function init() {
@@ -270,6 +276,7 @@ function handleAgentList(agentList) {
   // Remove agents that are no longer in the list (but keep temp agents)
   for (const [agentId, agent] of agents) {
     if (!activeAgentIds.has(agentId) && !agent.isTemp) {
+      removeAgentTab(agentId);
       removeAgentConsole(agentId);
       agents.delete(agentId);
     }
@@ -666,6 +673,11 @@ function createAgentConsole(agentId) {
     });
   }
 
+  // Add tab for this agent (non-temp only)
+  if (!isTemp) {
+    addAgentTab(agentId, agent.name);
+  }
+
   // Refresh global git status panel
   refreshGlobalGitInfo();
 }
@@ -745,6 +757,9 @@ async function closeAgent(agentId) {
   flushTypewriter(agentId);
   typewriterQueues.delete(agentId);
 
+  // Remove tab and terminal
+  removeAgentTab(agentId);
+
   // Remove from UI and state
   removeAgentConsole(agentId);
   agents.delete(agentId);
@@ -784,6 +799,7 @@ function updateAgentConsoleHeader(agentId) {
     statusSpan.textContent = agent.status.toUpperCase();
     statusSpan.className = `console-status ${agent.status}`;
   }
+  updateAgentTabName(agentId, agent.name);
 }
 
 function appendToConsole(agentId, text, type = 'default') {
@@ -1134,6 +1150,191 @@ document.getElementById('create-agent').addEventListener('click', async () => {
 window.electronAPI.onAgentOutput((data) => {
   const { agentId, output, type } = data;
   appendToConsole(agentId, output, type);
+});
+
+// --- Tab System ---
+function switchTab(tabId) {
+  activeTab = tabId;
+
+  // Update tab button styles
+  tabBar.querySelectorAll('.tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tabId);
+  });
+
+  if (tabId === 'agents') {
+    // Show All Agents view
+    mainContent.style.display = 'flex';
+    terminalContainer.style.display = 'none';
+    // Hide all terminal views
+    terminalContainer.querySelectorAll('.terminal-view').forEach(tv => {
+      tv.style.display = 'none';
+    });
+  } else {
+    // Show a specific agent's terminal
+    mainContent.style.display = 'none';
+    terminalContainer.style.display = 'flex';
+
+    // Hide all terminal views, show the selected one
+    terminalContainer.querySelectorAll('.terminal-view').forEach(tv => {
+      tv.style.display = 'none';
+    });
+
+    const termView = document.getElementById(`terminal-view-${tabId}`);
+    if (termView) {
+      termView.style.display = 'flex';
+      // Create terminal if not yet created
+      ensureTerminal(tabId);
+    }
+  }
+}
+
+function addAgentTab(agentId, agentName) {
+  // Don't add duplicate tabs
+  if (tabBar.querySelector(`[data-tab="${agentId}"]`)) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'tab';
+  btn.dataset.tab = agentId;
+  btn.textContent = agentName;
+  btn.addEventListener('click', () => switchTab(agentId));
+  tabBar.appendChild(btn);
+
+  // Create terminal view container
+  const termView = document.createElement('div');
+  termView.className = 'terminal-view';
+  termView.id = `terminal-view-${agentId}`;
+  termView.style.display = 'none';
+  terminalContainer.appendChild(termView);
+}
+
+function removeAgentTab(agentId) {
+  const btn = tabBar.querySelector(`[data-tab="${agentId}"]`);
+  if (btn) btn.remove();
+
+  const termView = document.getElementById(`terminal-view-${agentId}`);
+  if (termView) termView.remove();
+
+  // Destroy terminal
+  const termState = agentTerminals.get(agentId);
+  if (termState) {
+    termState.terminal.dispose();
+    window.electronAPI.destroyTerminal(agentId);
+    agentTerminals.delete(agentId);
+  }
+
+  // If we were viewing this tab, switch back to agents
+  if (activeTab === agentId) {
+    switchTab('agents');
+  }
+}
+
+function updateAgentTabName(agentId, name) {
+  const btn = tabBar.querySelector(`[data-tab="${agentId}"]`);
+  if (btn) btn.textContent = name;
+}
+
+async function ensureTerminal(agentId) {
+  const termState = agentTerminals.get(agentId);
+  if (termState && termState.created) {
+    // Just re-fit
+    setTimeout(() => termState.fitAddon.fit(), 50);
+    return;
+  }
+
+  const agent = agents.get(agentId);
+  const cwd = agent?.repoPath || '/';
+
+  const termView = document.getElementById(`terminal-view-${agentId}`);
+  if (!termView) return;
+
+  const terminal = new Terminal({
+    theme: {
+      background: '#0d0d0d',
+      foreground: '#e0e0e0',
+      cursor: '#10b981',
+      cursorAccent: '#0d0d0d',
+      selectionBackground: 'rgba(16, 185, 129, 0.3)',
+      black: '#1a1a1a',
+      red: '#ef4444',
+      green: '#10b981',
+      yellow: '#f59e0b',
+      blue: '#3b82f6',
+      magenta: '#a78bfa',
+      cyan: '#06b6d4',
+      white: '#e0e0e0',
+      brightBlack: '#707070',
+      brightRed: '#f87171',
+      brightGreen: '#34d399',
+      brightYellow: '#fbbf24',
+      brightBlue: '#60a5fa',
+      brightMagenta: '#c4b5fd',
+      brightCyan: '#22d3ee',
+      brightWhite: '#ffffff',
+    },
+    fontFamily: "'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+    cursorStyle: 'bar',
+  });
+
+  const FitAddonClass = window.FitAddon?.FitAddon || window.FitAddon;
+  const fitAddon = new FitAddonClass();
+  terminal.loadAddon(fitAddon);
+
+  terminal.open(termView);
+  fitAddon.fit();
+
+  // Send initial size to PTY
+  await window.electronAPI.createTerminal({
+    agentId,
+    cwd,
+    cols: terminal.cols,
+    rows: terminal.rows,
+  });
+
+  // Forward user input to PTY
+  terminal.onData((data) => {
+    window.electronAPI.writeTerminal({ agentId, data });
+  });
+
+  // Handle resize
+  terminal.onResize(({ cols, rows }) => {
+    window.electronAPI.resizeTerminal({ agentId, cols, rows });
+  });
+
+  // Fit on window resize
+  const resizeObserver = new ResizeObserver(() => {
+    fitAddon.fit();
+  });
+  resizeObserver.observe(termView);
+
+  agentTerminals.set(agentId, { terminal, fitAddon, created: true, resizeObserver });
+
+  // Launch lazygit after shell is ready
+  setTimeout(() => {
+    window.electronAPI.writeTerminal({ agentId, data: 'lazygit\n' });
+  }, 500);
+}
+
+// Listen for PTY output
+window.electronAPI.onTerminalData(({ agentId, data }) => {
+  const termState = agentTerminals.get(agentId);
+  if (termState) {
+    termState.terminal.write(data);
+  }
+});
+
+// Listen for PTY exit
+window.electronAPI.onTerminalExit(({ agentId, exitCode }) => {
+  const termState = agentTerminals.get(agentId);
+  if (termState) {
+    termState.terminal.write(`\r\n[Process exited with code ${exitCode}]\r\n`);
+  }
+});
+
+// Set up the "All Agents" tab click handler
+document.querySelector('[data-tab="agents"]').addEventListener('click', () => {
+  switchTab('agents');
 });
 
 // Initialize

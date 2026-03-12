@@ -2,9 +2,11 @@ const { app, BrowserWindow, Menu, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 const fs = require('fs');
+const pty = require('node-pty');
 
 let mainWindow;
 const agents = new Map(); // agentId -> { process, repoPath, ... }
+const terminals = new Map(); // agentId -> pty process
 
 // Console persistence
 const CONSOLES_FILE = () => path.join(app.getPath('userData'), 'consoles.json');
@@ -101,6 +103,12 @@ app.on('window-all-closed', () => {
       agent.process.kill();
     }
   });
+
+  // Cleanup all terminal processes
+  terminals.forEach((ptyProcess) => {
+    ptyProcess.kill();
+  });
+  terminals.clear();
 
   if (process.platform !== 'darwin') {
     app.quit();
@@ -530,4 +538,63 @@ ipcMain.handle('send-prompt-to-agent', async (event, { agentId, prompt }) => {
   // This will be handled by the WebSocket connection in the renderer
   // For now, just echo back for testing
   return { success: true, agentId, prompt };
+});
+
+// IPC: Create a PTY terminal for an agent
+ipcMain.handle('create-terminal', async (event, { agentId, cwd, cols, rows }) => {
+  // Kill existing terminal for this agent if any
+  if (terminals.has(agentId)) {
+    terminals.get(agentId).kill();
+    terminals.delete(agentId);
+  }
+
+  const shell = process.env.SHELL || '/bin/zsh';
+  const ptyProcess = pty.spawn(shell, [], {
+    name: 'xterm-256color',
+    cols: cols || 80,
+    rows: rows || 24,
+    cwd: cwd || process.env.HOME,
+    env: process.env,
+  });
+
+  ptyProcess.onData((data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('terminal-data', { agentId, data });
+    }
+  });
+
+  ptyProcess.onExit(({ exitCode }) => {
+    terminals.delete(agentId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('terminal-exit', { agentId, exitCode });
+    }
+  });
+
+  terminals.set(agentId, ptyProcess);
+  return true;
+});
+
+// IPC: Write data to a PTY terminal
+ipcMain.handle('write-terminal', async (event, { agentId, data }) => {
+  const ptyProcess = terminals.get(agentId);
+  if (ptyProcess) {
+    ptyProcess.write(data);
+  }
+});
+
+// IPC: Resize a PTY terminal
+ipcMain.handle('resize-terminal', async (event, { agentId, cols, rows }) => {
+  const ptyProcess = terminals.get(agentId);
+  if (ptyProcess) {
+    ptyProcess.resize(cols, rows);
+  }
+});
+
+// IPC: Destroy a PTY terminal
+ipcMain.handle('destroy-terminal', async (event, agentId) => {
+  const ptyProcess = terminals.get(agentId);
+  if (ptyProcess) {
+    ptyProcess.kill();
+    terminals.delete(agentId);
+  }
 });
