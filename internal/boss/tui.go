@@ -18,8 +18,17 @@ const maxOutputLines = 100
 // splashDuration controls how long the splash screen is shown.
 const splashDuration = 2 * time.Second
 
+// typewriterInterval controls how fast characters appear (lower = faster).
+const typewriterInterval = 15 * time.Millisecond
+
+// charsPerTick controls how many characters to add per tick (higher = faster).
+const charsPerTick = 2
+
 // splashDoneMsg signals the splash screen timer has elapsed.
 type splashDoneMsg struct{}
+
+// typewriterTickMsg signals it's time to add more characters to the animation.
+type typewriterTickMsg struct{}
 
 var splashArt = `
     ____                  ____     __   ___                    __
@@ -33,7 +42,17 @@ var splashArt = `
 // agentPanel holds per-agent display state.
 type agentPanel struct {
 	info   protocol.AgentInfo
-	output []string // display lines
+	output []string // fully displayed lines
+
+	// Pinned prompt at top
+	currentPrompt string // the current user prompt (pinned at top during execution)
+
+	// Animation state for typewriter effect
+	animBuffer     []string // lines waiting to be animated
+	currentLine    string   // line currently being animated
+	currentPos     int      // position in current line being displayed
+	isAnimating    bool     // true if animation is in progress
+	instantDisplay bool     // true for tags like [user], [tool], etc
 }
 
 // Model is the bubbletea model for the boss TUI.
@@ -73,7 +92,15 @@ func (m Model) Init() tea.Cmd {
 		tea.Tick(splashDuration, func(t time.Time) tea.Msg {
 			return splashDoneMsg{}
 		}),
+		typewriterTick(),
 	)
+}
+
+// typewriterTick returns a command that sends typewriter tick messages.
+func typewriterTick() tea.Cmd {
+	return tea.Tick(typewriterInterval, func(t time.Time) tea.Msg {
+		return typewriterTickMsg{}
+	})
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -83,6 +110,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case splashDoneMsg:
 		m.showSplash = false
 		return m, nil
+
+	case typewriterTickMsg:
+		// Advance animation for all agents
+		anyAnimating := false
+		for i := range m.agents {
+			if m.advanceAnimation(&m.agents[i]) {
+				anyAnimating = true
+			}
+		}
+		// Continue ticking if any agent is animating
+		if anyAnimating {
+			cmds = append(cmds, typewriterTick())
+		}
 
 	case tea.KeyMsg:
 		// Allow dismissing splash early with any key (except quit).
@@ -110,6 +150,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			prompt := strings.TrimSpace(m.input.Value())
 			if prompt != "" && len(m.agents) > 0 && m.sel < len(m.agents) {
 				agent := m.agents[m.sel]
+
+				// Pin the prompt at the top of the pane during execution
+				m.agents[m.sel].currentPrompt = fmt.Sprintf("[user] %s", prompt)
+
 				err := m.ws.SendCommand(protocol.Command{
 					CommandID: uuid.New().String(),
 					AgentID:   agent.info.AgentID,
@@ -142,6 +186,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ProgressMsg:
 		m.appendProgress(msg)
+		// Restart ticker if any agent is animating
+		for i := range m.agents {
+			if m.agents[i].isAnimating {
+				cmds = append(cmds, typewriterTick())
+				break
+			}
+		}
 
 	case StatusMsg:
 		m.updateAgentStatus(msg.AgentID, msg.Status)
@@ -198,20 +249,100 @@ func (m *Model) appendProgress(p ProgressMsg) {
 	for i := range m.agents {
 		if m.agents[i].info.AgentID == p.AgentID {
 			if p.IsFinal {
-				m.agents[i].output = append(m.agents[i].output, "[done]")
+				// Task completed - keep the prompt in title to show last task
+				m.addLineToAgent(&m.agents[i], "[done]", true)
 			} else {
 				line := parseProgressLine(p.Line)
 				if line != "" {
-					m.agents[i].output = append(m.agents[i].output, line)
-					// Trim to max lines.
-					if len(m.agents[i].output) > maxOutputLines {
-						m.agents[i].output = m.agents[i].output[len(m.agents[i].output)-maxOutputLines:]
-					}
+					// Determine if this should be instant or animated
+					instant := shouldDisplayInstantly(line)
+					m.addLineToAgent(&m.agents[i], line, instant)
 				}
 			}
 			return
 		}
 	}
+}
+
+// shouldDisplayInstantly returns true for tags and system messages that should appear immediately.
+func shouldDisplayInstantly(line string) bool {
+	// Tags and system messages appear instantly
+	instantPrefixes := []string{"[user]", "[tool]", "[tool_result]", "[system]", "[error]", "[ERROR]", "[✓]", "[done]"}
+	for _, prefix := range instantPrefixes {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// addLineToAgent adds a line to an agent's display, either instantly or to the animation buffer.
+func (m *Model) addLineToAgent(ap *agentPanel, line string, instant bool) {
+	if instant {
+		// Add directly to output
+		ap.output = append(ap.output, line)
+		// Trim to max lines
+		if len(ap.output) > maxOutputLines {
+			ap.output = ap.output[len(ap.output)-maxOutputLines:]
+		}
+	} else {
+		// Add to animation buffer
+		ap.animBuffer = append(ap.animBuffer, line)
+		if !ap.isAnimating {
+			ap.isAnimating = true
+			// Start next line
+			if len(ap.animBuffer) > 0 {
+				ap.currentLine = ap.animBuffer[0]
+				ap.animBuffer = ap.animBuffer[1:]
+				ap.currentPos = 0
+			}
+		}
+	}
+}
+
+// advanceAnimation advances the typewriter animation for an agent.
+// Returns true if the agent is still animating.
+func (m *Model) advanceAnimation(ap *agentPanel) bool {
+	if !ap.isAnimating {
+		return false
+	}
+
+	// If no current line, check if there's more in the buffer
+	if ap.currentLine == "" {
+		if len(ap.animBuffer) > 0 {
+			ap.currentLine = ap.animBuffer[0]
+			ap.animBuffer = ap.animBuffer[1:]
+			ap.currentPos = 0
+		} else {
+			ap.isAnimating = false
+			return false
+		}
+	}
+
+	// Add characters to the display
+	lineLen := len(ap.currentLine)
+	if ap.currentPos < lineLen {
+		// Add charsPerTick characters (or remaining if less)
+		endPos := ap.currentPos + charsPerTick
+		if endPos > lineLen {
+			endPos = lineLen
+		}
+		ap.currentPos = endPos
+
+		// If we've completed the line, add it to output
+		if ap.currentPos >= lineLen {
+			ap.output = append(ap.output, ap.currentLine)
+			// Trim to max lines
+			if len(ap.output) > maxOutputLines {
+				ap.output = ap.output[len(ap.output)-maxOutputLines:]
+			}
+			ap.currentLine = ""
+			ap.currentPos = 0
+		}
+	}
+
+	// Check if there's more to animate
+	return ap.currentLine != "" || len(ap.animBuffer) > 0
 }
 
 func (m *Model) updateAgentStatus(agentID, status string) {
@@ -243,15 +374,138 @@ func parseProgressLine(raw json.RawMessage) string {
 	}
 
 	msgType, _ := obj["type"].(string)
+	subtype, _ := obj["subtype"].(string)
 
 	switch msgType {
+	case "system":
+		// Show system initialization messages
+		if subtype == "init" {
+			return "[system] Claude session started"
+		}
+		return fmt.Sprintf("[system] %s", subtype)
+
 	case "assistant":
+		// Parse full assistant message and extract all content
+		if message, ok := obj["message"].(map[string]interface{}); ok {
+			if content, ok := message["content"].([]interface{}); ok {
+				var parts []string
+				for _, c := range content {
+					if block, ok := c.(map[string]interface{}); ok {
+						blockType, _ := block["type"].(string)
+						switch blockType {
+						case "text":
+							if text, ok := block["text"].(string); ok {
+								parts = append(parts, text)
+							}
+						case "tool_use":
+							name, _ := block["name"].(string)
+							// Extract tool input parameters for display
+							if input, ok := block["input"].(map[string]interface{}); ok {
+								var inputParts []string
+								for k, v := range input {
+									// Show key parameters, truncate long values
+									val := fmt.Sprintf("%v", v)
+									if len(val) > 60 {
+										val = val[:57] + "..."
+									}
+									inputParts = append(inputParts, fmt.Sprintf("%s: %s", k, val))
+								}
+								if len(inputParts) > 0 {
+									parts = append(parts, fmt.Sprintf("[tool] %s\n  %s", name, strings.Join(inputParts, ", ")))
+								} else {
+									parts = append(parts, fmt.Sprintf("[tool] %s", name))
+								}
+							} else {
+								parts = append(parts, fmt.Sprintf("[tool] %s", name))
+							}
+						case "thinking":
+							parts = append(parts, "[thinking]")
+						}
+					}
+				}
+				if len(parts) > 0 {
+					return strings.Join(parts, "\n")
+				}
+			}
+		}
+		return ""
+
+	case "content_block_delta":
+		// Handle streaming text deltas
+		if delta, ok := obj["delta"].(map[string]interface{}); ok {
+			deltaType, _ := delta["type"].(string)
+			switch deltaType {
+			case "text_delta":
+				if text, ok := delta["text"].(string); ok {
+					return text
+				}
+			case "thinking_delta":
+				if text, ok := delta["text"].(string); ok {
+					return fmt.Sprintf("[thinking] %s", text)
+				}
+			}
+		}
+		return ""
+
+	case "content_block_start":
+		// Show when tool use or thinking blocks start
+		if cb, ok := obj["content_block"].(map[string]interface{}); ok {
+			cbType, _ := cb["type"].(string)
+			switch cbType {
+			case "tool_use":
+				name, _ := cb["name"].(string)
+				return fmt.Sprintf("[tool] %s", name)
+			case "thinking":
+				return "[thinking started]"
+			case "text":
+				return "" // Text will come in deltas
+			}
+		}
+		return ""
+
+	case "result":
+		// Show result status with more detail
+		isError, _ := obj["is_error"].(bool)
+		if isError {
+			if result, ok := obj["result"].(string); ok {
+				return fmt.Sprintf("[error] %s", result)
+			}
+			return "[error] Command failed"
+		}
+		// Success - show a concise completion message
+		if subtype == "success" {
+			return "[✓] Command completed successfully"
+		}
+		return "[✓] completed"
+
+	case "user":
+		// Handle tool results coming back from tool execution
 		if message, ok := obj["message"].(map[string]interface{}); ok {
 			if content, ok := message["content"].([]interface{}); ok {
 				for _, c := range content {
 					if block, ok := c.(map[string]interface{}); ok {
-						if text, ok := block["text"].(string); ok {
-							return text
+						if blockType, _ := block["type"].(string); blockType == "tool_result" {
+							isError, _ := block["is_error"].(bool)
+							resultContent, _ := block["content"].(string)
+
+							if isError {
+								// Truncate error output if too long
+								if len(resultContent) > 200 {
+									resultContent = resultContent[:197] + "..."
+								}
+								return fmt.Sprintf("[tool_result] ERROR: %s", resultContent)
+							}
+
+							// Truncate successful output if too long
+							if len(resultContent) > 150 {
+								lines := strings.Split(resultContent, "\n")
+								if len(lines) > 3 {
+									resultContent = strings.Join(lines[:3], "\n") + fmt.Sprintf("\n  ... (%d more lines)", len(lines)-3)
+								} else if len(resultContent) > 150 {
+									resultContent = resultContent[:147] + "..."
+								}
+							}
+							return fmt.Sprintf("[tool_result] %s", resultContent)
 						}
 					}
 				}
@@ -259,32 +513,24 @@ func parseProgressLine(raw json.RawMessage) string {
 		}
 		return ""
 
-	case "content_block_delta":
-		if delta, ok := obj["delta"].(map[string]interface{}); ok {
-			if text, ok := delta["text"].(string); ok {
-				return text
+	case "error":
+		// Show errors clearly
+		if msg, ok := obj["error"].(map[string]interface{}); ok {
+			if errMsg, ok := msg["message"].(string); ok {
+				return fmt.Sprintf("[ERROR] %s", errMsg)
 			}
 		}
-		return ""
+		return "[ERROR] An error occurred"
 
-	case "content_block_start":
-		if cb, ok := obj["content_block"].(map[string]interface{}); ok {
-			if cbType, ok := cb["type"].(string); ok && cbType == "tool_use" {
-				name, _ := cb["name"].(string)
-				return fmt.Sprintf("[tool] %s", name)
-			}
-		}
-		return ""
+	case "message_start":
+		return "[assistant] Processing..."
 
-	case "result":
-		return "[result] completed"
-
-	case "message_start", "message_delta", "message_stop",
-		"content_block_stop", "ping":
+	case "message_delta", "message_stop", "content_block_stop", "ping":
+		// These are metadata events - don't display
 		return ""
 
 	default:
-		// For unrecognized types, show a summary.
+		// For unrecognized types, show a summary only if it might be important
 		if msgType != "" {
 			return fmt.Sprintf("[%s]", msgType)
 		}
@@ -411,8 +657,17 @@ func (m Model) renderPanels() string {
 		panelWidth = 20
 	}
 
-	// Reserve height for header(1) + status(1) + input(2) + padding(2).
-	panelHeight := m.height - 7
+	// Reserve height for:
+	// - header: 1 line
+	// - header newline: 1 line
+	// - status bar: 1 line
+	// - status newline: 1 line
+	// - agent selector: 1 line
+	// - selector newline: 1 line
+	// - input: 1 line
+	// - input newline: 1 line
+	// Total overhead: 8 lines
+	panelHeight := m.height - 8
 	if panelHeight < 5 {
 		panelHeight = 5
 	}
@@ -426,38 +681,73 @@ func (m Model) renderPanels() string {
 }
 
 func (m Model) renderOnePanel(ap agentPanel, selected bool, width, height int) string {
-	// Title line.
+	// Title line with optional prompt.
 	name := agentNameStyle.Render(ap.info.Name)
 	tag := renderStatusTag(ap.info.Status)
-	title := fmt.Sprintf("%s %s", name, tag)
 
-	// Content lines.
-	contentHeight := height - 2 // title + separator
-	if contentHeight < 1 {
-		contentHeight = 1
+	// Build title with prompt if active
+	var title string
+	if ap.currentPrompt != "" {
+		// Strip the [user] prefix if present
+		prompt := strings.TrimPrefix(ap.currentPrompt, "[user] ")
+		// Truncate prompt to fit in title (leave room for name, tag, quotes, and padding)
+		maxPromptLen := width - len(ap.info.Name) - 15 // conservative estimate
+		if maxPromptLen < 10 {
+			maxPromptLen = 10
+		}
+		if len(prompt) > maxPromptLen {
+			prompt = prompt[:maxPromptLen-3] + "..."
+		}
+		title = fmt.Sprintf("%s %s - \"%s\"", name, tag, prompt)
+	} else {
+		title = fmt.Sprintf("%s %s", name, tag)
 	}
 
-	lines := ap.output
-	if len(lines) > contentHeight {
-		lines = lines[len(lines)-contentHeight:]
+	// Calculate total content height (excluding title + separator)
+	totalContentHeight := height - 2 // account for title + separator
+	if totalContentHeight < 1 {
+		totalContentHeight = 1
 	}
 
-	// Truncate lines to fit width.
+	// Truncate lines to fit width
 	contentWidth := width - 4
 	if contentWidth < 10 {
 		contentWidth = 10
 	}
+
+	// Build content lines (make a copy to avoid modifying original)
+	lines := make([]string, len(ap.output))
+	copy(lines, ap.output)
+
+	// Add currently animating partial line (with cursor)
+	if ap.isAnimating && ap.currentLine != "" && ap.currentPos > 0 {
+		partialLine := ap.currentLine[:ap.currentPos] + "▌"
+		lines = append(lines, partialLine)
+	}
+
+	// Trim to available height
+	if len(lines) > totalContentHeight {
+		lines = lines[len(lines)-totalContentHeight:]
+	}
+
+	// Build final display lines
 	var displayLines []string
-	for _, l := range lines {
+	for i := 0; i < len(lines) && i < totalContentHeight; i++ {
+		l := lines[i]
 		if len(l) > contentWidth {
 			l = l[:contentWidth-1] + "~"
 		}
 		displayLines = append(displayLines, l)
 	}
 
-	// Pad to fill height.
-	for len(displayLines) < contentHeight {
+	// Pad to exact totalContentHeight
+	for len(displayLines) < totalContentHeight {
 		displayLines = append(displayLines, "")
+	}
+
+	// Final safety check - hard limit to totalContentHeight
+	if len(displayLines) > totalContentHeight {
+		displayLines = displayLines[:totalContentHeight]
 	}
 
 	content := title + "\n" + strings.Repeat("─", contentWidth) + "\n" + strings.Join(displayLines, "\n")
@@ -475,7 +765,9 @@ func (m Model) renderOnePanel(ap agentPanel, selected bool, width, height int) s
 		}
 	}
 
-	return style.Width(width).Height(height).Render(content)
+	// Use MaxHeight to enforce a hard limit without expansion
+	// This prevents panels from growing beyond allocated space
+	return style.Width(width).MaxHeight(height).Render(content)
 }
 
 func renderStatusTag(status string) string {

@@ -12,7 +12,21 @@
       "Bash(make agent:*)",
       "Bash(claude -p \"say hi\" --output-format stream-json 2>&1 | head -5)",
       "Bash(claude --version 2>&1 | head -1; claude --help 2>&1 | grep -A2 \"\\\\-p\\\\|--print\\\\|--output-format\\\\|dangerously\" || true)",
-      "Bash(find /Users/matthewroberts/development/projects/ParallelAgents -type f | grep -E \"\\\\.\\(go|json|yaml|yml\\)$\" | sort)"
+      "Bash(find /Users/matthewroberts/development/projects/ParallelAgents -type f | grep -E \"\\\\.\\(go|json|yaml|yml\\)$\" | sort)",
+      "Bash(claude -p \"say hi\" --output-format stream-json)",
+      "Bash(claude -p \"say hi\" --output-format stream-json --verbose --dangerously-skip-permissions)",
+      "Bash(claude -p \"write a haiku about coding\" --output-format stream-json --verbose --dangerously-skip-permissions)",
+      "Read(//private/tmp/**)",
+      "Bash(tee:*)",
+      "Bash(chmod:*)",
+      "Bash(go test:*)",
+      "Read(//tmp/**)",
+      "Bash(lsof:*)",
+      "Read(//Users/matthewroberts/development/projects/**)",
+      "Bash(ps:*)",
+      "Bash(mkdir:*)",
+      "Bash(npm install)",
+      "Bash(/Users/matthewroberts/development/projects/pp7/bin/parallelagents-agent:*)"
     ]
   }
 }

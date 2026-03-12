@@ -284,6 +284,8 @@ func (c *Client) readPumpAgent() {
 		case protocol.TypeStatusChange:
 			if env.StatusChange != nil {
 				c.hub.updateAgentStatus(c.agentID, env.StatusChange.Status)
+				// Also forward the status change message to the boss
+				c.hub.forwardToBoss(message)
 			}
 		case protocol.TypeError:
 			c.hub.forwardToBoss(message)

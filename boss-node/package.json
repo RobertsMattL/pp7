@@ -1,0 +1,19 @@
+{
+  "name": "parallelagents-boss-node",
+  "version": "1.0.0",
+  "description": "ParallelAgents Boss - Node.js/Electron UI for managing distributed Claude agents",
+  "main": "src/main.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": ["electron", "parallelagents", "claude", "websocket"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "electron": "^28.0.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {}
+}
