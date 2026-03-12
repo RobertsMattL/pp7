@@ -387,6 +387,12 @@ function handleProgressMessage(progress) {
 
   if (is_final) {
     appendToConsole(agent_id, '[DONE]', 'done');
+    // Auto-build if enabled
+    const agent = agents.get(agent_id);
+    if (agent && agent.autoBuild && agent.deviceSerial && agent.repoPath) {
+      appendToConsole(agent_id, '[auto-build] Triggering build...', 'system');
+      handlePlay(agent_id);
+    }
   } else {
     const parsedLine = parseProgressLine(line);
     if (parsedLine.text) {
@@ -606,6 +612,10 @@ function createAgentConsole(agentId) {
             <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
           </svg>
         </button>
+        <label class="auto-build-toggle">
+          <input type="checkbox" id="auto-build-${agentId}" class="auto-build-checkbox">
+          <span class="auto-build-label">Auto Build</span>
+        </label>
       </div>
     ` : ''}
     <div class="pinned-prompt hidden" id="prompt-${agentId}"></div>
@@ -670,6 +680,12 @@ function createAgentConsole(agentId) {
     const closeBtn = document.getElementById(`close-${agentId}`);
     closeBtn.addEventListener('click', () => {
       closeAgent(agentId);
+    });
+
+    // Auto-build checkbox
+    const autoBuildCb = document.getElementById(`auto-build-${agentId}`);
+    autoBuildCb.addEventListener('change', () => {
+      agent.autoBuild = autoBuildCb.checked;
     });
   }
 
@@ -822,17 +838,14 @@ async function handleSyncAll() {
     }
   }
 
-  // Phase 1: Push all dirty agents
+  // Phase 1: Commit and push all agents
   for (const { agentId, agent } of syncAgents) {
     try {
-      const info = await window.electronAPI.getGitInfo(agent.repoPath);
-      if (info && info.dirty) {
-        const result = await window.electronAPI.gitPush({ repoPath: agent.repoPath });
-        if (result.success) {
-          appendToConsole(agentId, `[sync] Pushed changes`, 'system');
-        } else {
-          appendToConsole(agentId, `[sync] Push failed: ${result.error}`, 'error');
-        }
+      const result = await window.electronAPI.gitPush({ repoPath: agent.repoPath });
+      if (result.success) {
+        appendToConsole(agentId, `[sync] Committed & pushed`, 'system');
+      } else {
+        appendToConsole(agentId, `[sync] Push failed: ${result.error}`, 'error');
       }
     } catch (err) {
       appendToConsole(agentId, `[sync] Push error: ${err.message}`, 'error');
