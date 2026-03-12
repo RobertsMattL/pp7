@@ -18,8 +18,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Build and launch
   buildAndLaunch: (data) => ipcRenderer.invoke('build-and-launch', data),
 
-  // Git info
+  // Git info and sync
   getGitInfo: (repoPath) => ipcRenderer.invoke('get-git-info', repoPath),
+  gitPush: (data) => ipcRenderer.invoke('git-push', data),
+  gitPull: (data) => ipcRenderer.invoke('git-pull', data),
 
   // Terminal
   createTerminal: (data) => ipcRenderer.invoke('create-terminal', data),

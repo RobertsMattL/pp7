@@ -355,6 +355,38 @@ ipcMain.handle('get-git-info', async (event, repoPath) => {
   }
 });
 
+// IPC: Git push (stage all, commit, push)
+ipcMain.handle('git-push', async (event, { repoPath, message }) => {
+  if (!repoPath || !fs.existsSync(repoPath)) {
+    return { success: false, error: 'Invalid repo path' };
+  }
+  try {
+    const status = execSync('git status --porcelain', { cwd: repoPath, encoding: 'utf8', timeout: 5000 }).trim();
+    if (status.length > 0) {
+      execSync('git add -A', { cwd: repoPath, encoding: 'utf8', timeout: 10000 });
+      const commitMsg = message || `sync: auto-commit ${new Date().toISOString()}`;
+      execSync(`git commit -m ${JSON.stringify(commitMsg)}`, { cwd: repoPath, encoding: 'utf8', timeout: 10000 });
+    }
+    const output = execSync('git push', { cwd: repoPath, encoding: 'utf8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'] });
+    return { success: true, output: output || 'Pushed successfully' };
+  } catch (err) {
+    return { success: false, error: err.stderr || err.message };
+  }
+});
+
+// IPC: Git pull
+ipcMain.handle('git-pull', async (event, { repoPath }) => {
+  if (!repoPath || !fs.existsSync(repoPath)) {
+    return { success: false, error: 'Invalid repo path' };
+  }
+  try {
+    const output = execSync('git pull', { cwd: repoPath, encoding: 'utf8', timeout: 30000 });
+    return { success: true, output: output || 'Already up to date' };
+  } catch (err) {
+    return { success: false, error: err.stderr || err.message };
+  }
+});
+
 // IPC handlers (existing)
 ipcMain.handle('clone-and-start-agent', async (event, config) => {
   const { githubUrl, agentName } = config;

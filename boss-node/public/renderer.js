@@ -705,9 +705,9 @@ async function refreshGlobalGitInfo() {
     agentEntries.map(async ({ agentId, agent }) => {
       try {
         const info = await window.electronAPI.getGitInfo(agent.repoPath);
-        return { agentId, name: agent.name, info };
+        return { agentId, name: agent.name, info, repoPath: agent.repoPath };
       } catch {
-        return { agentId, name: agent.name, info: null };
+        return { agentId, name: agent.name, info: null, repoPath: agent.repoPath };
       }
     })
   );
@@ -724,8 +724,8 @@ async function refreshGlobalGitInfo() {
   const allClean = validResults.every(r => !r.info.dirty);
   const allGreen = allSameHash && allClean;
 
-  // Build rows
-  panel.innerHTML = validResults.map(({ name, info }) => {
+  // Build rows with per-agent push/pull buttons
+  const rows = validResults.map(({ agentId, name, info }) => {
     const hashClass = allGreen ? 'git-hash synced' : (info.dirty ? 'git-hash dirty' : 'git-hash');
     const dirtyBadge = info.dirty
       ? `<span class="git-dirty">${info.changedFiles} change${info.changedFiles !== 1 ? 's' : ''}</span>`
@@ -736,10 +736,124 @@ async function refreshGlobalGitInfo() {
       <span class="${hashClass}">${escapeHtml(info.hash)}</span>
       ${dirtyBadge}
       <span class="git-message">${escapeHtml(info.message)}</span>
+      <div class="git-sync-btns">
+        <button class="git-btn git-push-btn" data-agent-id="${agentId}" title="Push changes to remote">Push</button>
+        <button class="git-btn git-pull-btn" data-agent-id="${agentId}" title="Pull changes from remote">Pull</button>
+      </div>
     </div>`;
   }).join('');
 
+  // Sync All bar
+  const syncBar = validResults.length > 1
+    ? `<div class="git-sync-bar">
+        <button class="git-btn git-sync-all-btn" id="sync-all-btn" title="Push all then pull all">Sync All</button>
+      </div>`
+    : '';
+
+  panel.innerHTML = rows + syncBar;
   panel.classList.add('visible');
+
+  // Attach per-agent push/pull handlers
+  panel.querySelectorAll('.git-push-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleGitPush(btn.dataset.agentId));
+  });
+  panel.querySelectorAll('.git-pull-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleGitPull(btn.dataset.agentId));
+  });
+
+  // Sync All handler
+  const syncAllBtn = document.getElementById('sync-all-btn');
+  if (syncAllBtn) {
+    syncAllBtn.addEventListener('click', handleSyncAll);
+  }
+}
+
+async function handleGitPush(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent || !agent.repoPath) return;
+
+  const btn = document.querySelector(`.git-push-btn[data-agent-id="${agentId}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+
+  try {
+    const result = await window.electronAPI.gitPush({ repoPath: agent.repoPath });
+    if (result.success) {
+      appendToConsole(agentId, `[git] Push successful`, 'system');
+    } else {
+      appendToConsole(agentId, `[git] Push failed: ${result.error}`, 'error');
+    }
+  } catch (err) {
+    appendToConsole(agentId, `[git] Push error: ${err.message}`, 'error');
+  }
+
+  refreshGlobalGitInfo();
+}
+
+async function handleGitPull(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent || !agent.repoPath) return;
+
+  const btn = document.querySelector(`.git-pull-btn[data-agent-id="${agentId}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '...'; }
+
+  try {
+    const result = await window.electronAPI.gitPull({ repoPath: agent.repoPath });
+    if (result.success) {
+      appendToConsole(agentId, `[git] Pull successful: ${result.output.trim()}`, 'system');
+    } else {
+      appendToConsole(agentId, `[git] Pull failed: ${result.error}`, 'error');
+    }
+  } catch (err) {
+    appendToConsole(agentId, `[git] Pull error: ${err.message}`, 'error');
+  }
+
+  refreshGlobalGitInfo();
+}
+
+async function handleSyncAll() {
+  const syncBtn = document.getElementById('sync-all-btn');
+  if (syncBtn) { syncBtn.disabled = true; syncBtn.textContent = 'Syncing...'; }
+
+  // Collect agents with repo paths
+  const syncAgents = [];
+  for (const [agentId, agent] of agents) {
+    if (!agent.isTemp && agent.repoPath) {
+      syncAgents.push({ agentId, agent });
+    }
+  }
+
+  // Phase 1: Push all dirty agents
+  for (const { agentId, agent } of syncAgents) {
+    try {
+      const info = await window.electronAPI.getGitInfo(agent.repoPath);
+      if (info && info.dirty) {
+        const result = await window.electronAPI.gitPush({ repoPath: agent.repoPath });
+        if (result.success) {
+          appendToConsole(agentId, `[sync] Pushed changes`, 'system');
+        } else {
+          appendToConsole(agentId, `[sync] Push failed: ${result.error}`, 'error');
+        }
+      }
+    } catch (err) {
+      appendToConsole(agentId, `[sync] Push error: ${err.message}`, 'error');
+    }
+  }
+
+  // Phase 2: Pull all agents
+  for (const { agentId, agent } of syncAgents) {
+    try {
+      const result = await window.electronAPI.gitPull({ repoPath: agent.repoPath });
+      if (result.success) {
+        appendToConsole(agentId, `[sync] Pulled: ${result.output.trim()}`, 'system');
+      } else {
+        appendToConsole(agentId, `[sync] Pull failed: ${result.error}`, 'error');
+      }
+    } catch (err) {
+      appendToConsole(agentId, `[sync] Pull error: ${err.message}`, 'error');
+    }
+  }
+
+  refreshGlobalGitInfo();
 }
 
 async function closeAgent(agentId) {
