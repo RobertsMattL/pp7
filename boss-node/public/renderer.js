@@ -312,56 +312,49 @@ function handleAgentList(agentList) {
         }
       }
 
+      // Only accept agents that have a matching temp agent (i.e., we started them).
+      // Ignore unknown agents from the server to prevent phantom agents appearing.
+      if (!tempAgent) {
+        console.log(`Ignoring unknown agent from server: ${agentInfo.name} (${agentInfo.agent_id})`);
+        return;
+      }
+
       // Restore cached device assignment by agent name
       const cachedSerial = deviceAssignments[agentInfo.name] || null;
 
-      if (tempAgent) {
-        // Migrate temp agent to real agent
-        console.log(`Migrating temp agent ${tempAgent.id} to real agent ${agentInfo.agent_id}`);
+      // Migrate temp agent to real agent
+      console.log(`Migrating temp agent ${tempAgent.id} to real agent ${agentInfo.agent_id}`);
 
-        // Get the output from the temp console
-        const tempOutputDiv = document.getElementById(`output-${tempAgent.id}`);
-        const tempOutput = tempOutputDiv ? Array.from(tempOutputDiv.children) : [];
+      // Get the output from the temp console
+      const tempOutputDiv = document.getElementById(`output-${tempAgent.id}`);
+      const tempOutput = tempOutputDiv ? Array.from(tempOutputDiv.children) : [];
 
-        // Get repoPath from temp agent
-        const repoPath = tempAgent.agent.repoPath || null;
+      // Get repoPath from temp agent
+      const repoPath = tempAgent.agent.repoPath || null;
 
-        // Remove temp console
-        removeAgentConsole(tempAgent.id);
-        agents.delete(tempAgent.id);
+      // Remove temp console
+      removeAgentConsole(tempAgent.id);
+      agents.delete(tempAgent.id);
 
-        // Create new agent with device info
-        agents.set(agentInfo.agent_id, {
-          id: agentInfo.agent_id,
-          name: agentInfo.name,
-          status: agentInfo.status,
-          output: [],
-          currentPrompt: '',
-          deviceSerial: cachedSerial,
-          repoPath: repoPath,
+      // Create new agent with device info
+      agents.set(agentInfo.agent_id, {
+        id: agentInfo.agent_id,
+        name: agentInfo.name,
+        status: agentInfo.status,
+        output: [],
+        currentPrompt: '',
+        deviceSerial: cachedSerial,
+        repoPath: repoPath,
+      });
+      createAgentConsole(agentInfo.agent_id);
+
+      // Migrate output
+      const newOutputDiv = document.getElementById(`output-${agentInfo.agent_id}`);
+      if (newOutputDiv) {
+        tempOutput.forEach(line => {
+          newOutputDiv.appendChild(line.cloneNode(true));
         });
-        createAgentConsole(agentInfo.agent_id);
-
-        // Migrate output
-        const newOutputDiv = document.getElementById(`output-${agentInfo.agent_id}`);
-        if (newOutputDiv) {
-          tempOutput.forEach(line => {
-            newOutputDiv.appendChild(line.cloneNode(true));
-          });
-          newOutputDiv.scrollTop = newOutputDiv.scrollHeight;
-        }
-      } else {
-        // New agent (no temp agent to migrate)
-        agents.set(agentInfo.agent_id, {
-          id: agentInfo.agent_id,
-          name: agentInfo.name,
-          status: agentInfo.status,
-          output: [],
-          currentPrompt: '',
-          deviceSerial: cachedSerial,
-          repoPath: agentInfo.workdir || null,
-        });
-        createAgentConsole(agentInfo.agent_id);
+        newOutputDiv.scrollTop = newOutputDiv.scrollHeight;
       }
     } else {
       // Update existing agent
