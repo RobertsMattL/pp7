@@ -1296,7 +1296,18 @@ document.getElementById('create-agent').addEventListener('click', async () => {
 // Listen for agent output from main process
 window.electronAPI.onAgentOutput((data) => {
   const { agentId, output, type } = data;
-  appendToConsole(agentId, output, type);
+
+  // If type is 'default', the output is likely Claude's stream-json format
+  // Parse it to extract the actual content
+  if (type === 'default') {
+    const parsedLine = parseProgressLine(output);
+    if (parsedLine.text) {
+      appendToConsole(agentId, parsedLine.text, parsedLine.type);
+    }
+  } else {
+    // For other types (system, error, git, etc.), append directly
+    appendToConsole(agentId, output, type);
+  }
 });
 
 // --- Project Management ---

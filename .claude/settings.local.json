@@ -52,7 +52,8 @@
       "Bash(pkill:*)",
       "Bash(cat:*)",
       "Bash(git submodule:*)",
-      "Bash(timeout 15 npx electron:*)"
+      "Bash(timeout 15 npx electron:*)",
+      "Bash(make:*)"
     ]
   }
 }

@@ -1052,11 +1052,32 @@ function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl, silent =
   });
 
   agentProcess.stdout.on('data', (data) => {
-    console.log(`[Agent ${agentName}] ${data.toString().trim()}`);
+    const lines = data.toString().split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        console.log(`[Agent ${agentName}] ${trimmed}`);
+        // Send each line to renderer for parsing and display
+        // The renderer's parseProgressLine will handle the stream-json format
+        sendToRenderer('agent-output', {
+          agentId: tempAgentId,
+          output: trimmed,
+          type: 'default',
+        });
+      }
+    }
   });
 
   agentProcess.stderr.on('data', (data) => {
-    console.error(`[Agent ${agentName}] ${data.toString().trim()}`);
+    const trimmed = data.toString().trim();
+    console.error(`[Agent ${agentName}] ${trimmed}`);
+    if (trimmed) {
+      sendToRenderer('agent-output', {
+        agentId: tempAgentId,
+        output: trimmed,
+        type: 'error',
+      });
+    }
   });
 
   agentProcess.on('error', (err) => {
