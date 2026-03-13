@@ -11,6 +11,9 @@ let devicePollInterval = null;
 // Typewriter system: per-agent queue of text chunks to animate
 const typewriterQueues = new Map(); // agentId -> { queue: [], typing: bool, lineEl: null, cursorEl: null }
 
+// Code block tracking: per-agent state for detecting and highlighting code blocks
+const codeBlockState = new Map(); // agentId -> { inBlock: bool, language: string, lines: [], startMarker: string }
+
 // Device assignments persisted by agent name (since agent IDs change between sessions)
 let deviceAssignments = {}; // { agentName: deviceSerial }
 
@@ -1083,12 +1086,19 @@ function processTypewriterQueue(agentId) {
         }
 
         // Remove cursor and typing class from current line
+        const completedLine = state.lineEl;
         state.lineEl.classList.remove('typing');
         if (state.cursorEl.parentNode) {
           state.cursorEl.remove();
         }
 
-        // Create new line
+        // Process line for code blocks
+        const lineText = completedLine.textContent || '';
+        const wasCodeBlock = processLineForCodeBlock(agentId, completedLine, lineText);
+
+        // Create new line (if not consumed by code block)
+        // Note: we always create a new line because even if we're in a code block,
+        // we need somewhere for the next text to go before we process it
         state.lineEl = document.createElement('div');
         state.lineEl.className = 'console-line default typing';
         outputDiv.appendChild(state.lineEl);
@@ -1136,6 +1146,9 @@ function flushTypewriter(agentId) {
     const lines = text.split('\n');
     lines.forEach((lineText, i) => {
       if (i > 0) {
+        // Process previous line for code blocks before creating new one
+        processLineForCodeBlock(agentId, state.lineEl, state.lineEl.textContent || '');
+
         state.lineEl = document.createElement('div');
         state.lineEl.className = 'console-line default';
         outputDiv.appendChild(state.lineEl);
@@ -1144,6 +1157,11 @@ function flushTypewriter(agentId) {
         state.lineEl.appendChild(document.createTextNode(lineText));
       }
     });
+
+    // Process the last line
+    if (state.lineEl) {
+      processLineForCodeBlock(agentId, state.lineEl, state.lineEl.textContent || '');
+    }
   }
 
   state.queue = [];
@@ -1158,6 +1176,76 @@ function flushTypewriter(agentId) {
   state.cursorEl = null;
 }
 
+// --- Code Block Detection and Highlighting ---
+function getCodeBlockState(agentId) {
+  if (!codeBlockState.has(agentId)) {
+    codeBlockState.set(agentId, {
+      inBlock: false,
+      language: '',
+      lines: [],
+      blockElement: null
+    });
+  }
+  return codeBlockState.get(agentId);
+}
+
+function processLineForCodeBlock(agentId, lineEl, lineText) {
+  const state = getCodeBlockState(agentId);
+
+  // Check for code block start marker (```)
+  const codeBlockStart = lineText.match(/^```(\w+)?/);
+  if (codeBlockStart && !state.inBlock) {
+    // Starting a code block
+    state.inBlock = true;
+    state.language = codeBlockStart[1] || 'plaintext';
+    state.lines = [];
+
+    // Create a container for the code block
+    state.blockElement = document.createElement('div');
+    state.blockElement.className = 'code-block-container';
+    lineEl.parentNode.replaceChild(state.blockElement, lineEl);
+    return true;
+  }
+
+  // Check for code block end marker (```)
+  if (lineText.match(/^```$/) && state.inBlock) {
+    // Ending a code block - apply highlighting
+    const code = state.lines.join('\n');
+
+    const pre = document.createElement('pre');
+    const codeEl = document.createElement('code');
+    codeEl.className = `language-${state.language}`;
+    codeEl.textContent = code;
+    pre.appendChild(codeEl);
+
+    state.blockElement.appendChild(pre);
+
+    // Apply syntax highlighting if hljs is available
+    if (typeof hljs !== 'undefined') {
+      hljs.highlightElement(codeEl);
+    }
+
+    // Reset state
+    state.inBlock = false;
+    state.language = '';
+    state.lines = [];
+    state.blockElement = null;
+    return true;
+  }
+
+  // If we're inside a code block, accumulate lines
+  if (state.inBlock) {
+    state.lines.push(lineText);
+    // Remove the line element since we're accumulating in the block
+    if (lineEl && lineEl.parentNode) {
+      lineEl.remove();
+    }
+    return true;
+  }
+
+  return false;
+}
+
 function sendPrompt(agentId) {
   const input = document.getElementById(`input-${agentId}`);
   if (!input) return;
@@ -1168,11 +1256,13 @@ function sendPrompt(agentId) {
   const agent = agents.get(agentId);
   if (!agent) return;
 
-  // Update pinned prompt
+  // Update pinned prompt and track start time
   agent.currentPrompt = prompt;
+  agent.promptStartTime = new Date();
   const pinnedPromptDiv = document.getElementById(`prompt-${agentId}`);
   if (pinnedPromptDiv) {
-    pinnedPromptDiv.textContent = `"${prompt}"`;
+    const startTimeStr = agent.promptStartTime.toLocaleTimeString();
+    pinnedPromptDiv.textContent = `"${prompt}" (started ${startTimeStr})`;
     pinnedPromptDiv.classList.remove('hidden');
   }
 

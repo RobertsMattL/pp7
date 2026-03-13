@@ -54,7 +54,16 @@
       "Bash(git submodule:*)",
       "Bash(timeout 15 npx electron:*)",
       "Bash(make:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "WebFetch(domain:code.claude.com)",
+      "Bash(find:*)",
+      "Bash(npm start)",
+      "Bash(claude --version)",
+      "Read(//Users/matthewroberts/.config/**)",
+      "Read(//Users/matthewroberts/Library/**)",
+      "Read(//Users/matthewroberts/**)",
+      "Bash(unset:*)",
+      "Bash(claude setup-token:*)"
     ]
   }
 }

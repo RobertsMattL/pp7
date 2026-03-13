@@ -777,6 +777,32 @@ body {
   text-shadow: 0 0 8px rgba(16, 185, 129, 0.15);
 }
 
+/* Code Block Highlighting */
+.code-block-container {
+  margin: 8px 0;
+}
+
+.code-block-container pre {
+  margin: 0;
+  padding: 12px;
+  background-color: #0d1117;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+}
+
+.code-block-container code {
+  font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Override highlight.js theme colors to match our dark theme */
+.code-block-container .hljs {
+  background-color: transparent;
+  color: var(--text-primary);
+}
+
 /* Console Input */
 .console-input-container {
   display: flex;
