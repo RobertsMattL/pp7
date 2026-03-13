@@ -64,7 +64,12 @@
       "Read(//Users/matthewroberts/**)",
       "Bash(unset:*)",
       "Bash(claude setup-token:*)",
-      "Bash(env)"
+      "Bash(env)",
+      "Bash(npm install:*)",
+      "Bash(ls /Users/matthewroberts/development/projects/ParallelAgents/boss-node/node_modules/highlight.js/lib/ && ls /Users/matthewroberts/development/projects/ParallelAgents/boss-node/node_modules/highlight.js/styles/github-dark*)",
+      "Bash(curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js\" -o /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/highlight.min.js && mkdir -p /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor 2>/dev/null; curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js\" -o /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/highlight.min.js && curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css\" -o /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/github-dark.min.css)",
+      "Bash(mkdir -p /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor && curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js\" -o /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/highlight.min.js)",
+      "Bash(curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css\" -o /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/github-dark.min.css && ls -la /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/)"
     ]
   }
 }

@@ -210,6 +210,9 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, '../public/index.html'));
 
+  // Open DevTools in development
+  mainWindow.webContents.openDevTools({ mode: 'detach' });
+
   // Create application menu
   const menu = Menu.buildFromTemplate([
     {

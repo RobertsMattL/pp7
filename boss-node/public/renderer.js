@@ -1,3 +1,6 @@
+// Debug: verify highlight.js loaded
+console.log('highlight.js available:', typeof hljs !== 'undefined', typeof hljs !== 'undefined' ? hljs.listLanguages().length + ' languages' : 'N/A');
+
 // WebSocket connection state
 let ws = null;
 let isConnected = false;
@@ -11,8 +14,7 @@ let devicePollInterval = null;
 // Typewriter system: per-agent queue of text chunks to animate
 const typewriterQueues = new Map(); // agentId -> { queue: [], typing: bool, lineEl: null, cursorEl: null }
 
-// Code block tracking: per-agent state for detecting and highlighting code blocks
-const codeBlockState = new Map(); // agentId -> { inBlock: bool, language: string, lines: [], startMarker: string }
+// Code block tracking (post-process based — see highlightCodeBlocks)
 
 // Device assignments persisted by agent name (since agent IDs change between sessions)
 let deviceAssignments = {}; // { agentName: deviceSerial }
@@ -703,6 +705,9 @@ function createAgentConsole(agentId) {
     addAgentTab(agentId, agent.name);
   }
 
+  // Set up code highlighting observer for this console
+  setupHighlightObserver(agentId);
+
   // Refresh global git status panel
   refreshGlobalGitInfo();
 }
@@ -909,6 +914,11 @@ async function closeAgent(agentId) {
   flushTypewriter(agentId);
   typewriterQueues.delete(agentId);
 
+  // Clean up highlight observer
+  const obs = highlightObservers.get(agentId);
+  if (obs) { obs.disconnect(); highlightObservers.delete(agentId); }
+  highlightTimers.delete(agentId);
+
   // Remove tab and terminal
   removeAgentTab(agentId);
 
@@ -1037,6 +1047,8 @@ function processTypewriterQueue(agentId) {
     if (state.lineEl) {
       state.lineEl.classList.remove('typing');
     }
+    // Post-process: highlight any code blocks in the output
+    scheduleHighlight(agentId);
     state.lineEl = null;
     state.cursorEl = null;
     return;
@@ -1078,31 +1090,32 @@ function processTypewriterQueue(agentId) {
       const char = chars[charIndex];
       if (char === '\n') {
         // Finish current line, start a new one
-        if (charsToAdd) {
-          // Insert text before cursor
+        if (charsToAdd && state.lineEl) {
           const textNode = document.createTextNode(charsToAdd);
-          state.lineEl.insertBefore(textNode, state.cursorEl);
+          if (state.cursorEl && state.cursorEl.parentNode === state.lineEl) {
+            state.lineEl.insertBefore(textNode, state.cursorEl);
+          } else {
+            state.lineEl.appendChild(textNode);
+          }
           charsToAdd = '';
         }
 
         // Remove cursor and typing class from current line
         const completedLine = state.lineEl;
-        state.lineEl.classList.remove('typing');
-        if (state.cursorEl.parentNode) {
+        if (completedLine) {
+          completedLine.classList.remove('typing');
+        }
+        if (state.cursorEl && state.cursorEl.parentNode) {
           state.cursorEl.remove();
         }
 
-        // Process line for code blocks
-        const lineText = completedLine.textContent || '';
-        const wasCodeBlock = processLineForCodeBlock(agentId, completedLine, lineText);
-
-        // Create new line (if not consumed by code block)
-        // Note: we always create a new line because even if we're in a code block,
-        // we need somewhere for the next text to go before we process it
+        // Create new line for next text
         state.lineEl = document.createElement('div');
         state.lineEl.className = 'console-line default typing';
         outputDiv.appendChild(state.lineEl);
-        state.lineEl.appendChild(state.cursorEl);
+        if (state.cursorEl) {
+          state.lineEl.appendChild(state.cursorEl);
+        }
 
         // Trim lines
         while (outputDiv.children.length > 1000) {
@@ -1114,9 +1127,13 @@ function processTypewriterQueue(agentId) {
     }
 
     // Insert accumulated text before cursor
-    if (charsToAdd) {
+    if (charsToAdd && state.lineEl) {
       const textNode = document.createTextNode(charsToAdd);
-      state.lineEl.insertBefore(textNode, state.cursorEl);
+      if (state.cursorEl && state.cursorEl.parentNode === state.lineEl) {
+        state.lineEl.insertBefore(textNode, state.cursorEl);
+      } else {
+        state.lineEl.appendChild(textNode);
+      }
     }
 
     // Auto-scroll
@@ -1146,9 +1163,6 @@ function flushTypewriter(agentId) {
     const lines = text.split('\n');
     lines.forEach((lineText, i) => {
       if (i > 0) {
-        // Process previous line for code blocks before creating new one
-        processLineForCodeBlock(agentId, state.lineEl, state.lineEl.textContent || '');
-
         state.lineEl = document.createElement('div');
         state.lineEl.className = 'console-line default';
         outputDiv.appendChild(state.lineEl);
@@ -1157,11 +1171,6 @@ function flushTypewriter(agentId) {
         state.lineEl.appendChild(document.createTextNode(lineText));
       }
     });
-
-    // Process the last line
-    if (state.lineEl) {
-      processLineForCodeBlock(agentId, state.lineEl, state.lineEl.textContent || '');
-    }
   }
 
   state.queue = [];
@@ -1174,77 +1183,165 @@ function flushTypewriter(agentId) {
   }
   state.lineEl = null;
   state.cursorEl = null;
+
+  // Post-process: highlight any code blocks
+  scheduleHighlight(agentId);
 }
 
 // --- Code Block Detection and Highlighting ---
-function getCodeBlockState(agentId) {
-  if (!codeBlockState.has(agentId)) {
-    codeBlockState.set(agentId, {
-      inBlock: false,
-      language: '',
-      lines: [],
-      blockElement: null
-    });
-  }
-  return codeBlockState.get(agentId);
+const highlightObservers = new Map(); // agentId -> MutationObserver
+const highlightTimers = new Map(); // agentId -> debounce timer
+
+function setupHighlightObserver(agentId) {
+  if (highlightObservers.has(agentId)) return;
+
+  const outputDiv = document.getElementById(`output-${agentId}`);
+  if (!outputDiv) return;
+
+  const observer = new MutationObserver(() => {
+    // Debounce: wait 500ms after last DOM change before highlighting
+    if (highlightTimers.has(agentId)) {
+      clearTimeout(highlightTimers.get(agentId));
+    }
+    highlightTimers.set(agentId, setTimeout(() => {
+      highlightTimers.delete(agentId);
+      highlightCodeBlocks(outputDiv);
+    }, 500));
+  });
+
+  observer.observe(outputDiv, { childList: true, subtree: true, characterData: true });
+  highlightObservers.set(agentId, observer);
+  console.log(`[hljs] Observer set up for agent ${agentId}`);
 }
 
-function processLineForCodeBlock(agentId, lineEl, lineText) {
-  const state = getCodeBlockState(agentId);
-
-  // Check for code block start marker (```)
-  const codeBlockStart = lineText.match(/^```(\w+)?/);
-  if (codeBlockStart && !state.inBlock) {
-    // Starting a code block
-    state.inBlock = true;
-    state.language = codeBlockStart[1] || 'plaintext';
-    state.lines = [];
-
-    // Create a container for the code block
-    state.blockElement = document.createElement('div');
-    state.blockElement.className = 'code-block-container';
-    lineEl.parentNode.replaceChild(state.blockElement, lineEl);
-    return true;
+function scheduleHighlight(agentId) {
+  // Also trigger highlight directly (backup for flush/queue-empty)
+  if (highlightTimers.has(agentId)) {
+    clearTimeout(highlightTimers.get(agentId));
   }
-
-  // Check for code block end marker (```)
-  if (lineText.match(/^```$/) && state.inBlock) {
-    // Ending a code block - apply highlighting
-    const code = state.lines.join('\n');
-
-    const pre = document.createElement('pre');
-    const codeEl = document.createElement('code');
-    codeEl.className = `language-${state.language}`;
-    codeEl.textContent = code;
-    pre.appendChild(codeEl);
-
-    state.blockElement.appendChild(pre);
-
-    // Apply syntax highlighting if hljs is available
-    if (typeof hljs !== 'undefined') {
-      hljs.highlightElement(codeEl);
+  highlightTimers.set(agentId, setTimeout(() => {
+    highlightTimers.delete(agentId);
+    const outputDiv = document.getElementById(`output-${agentId}`);
+    if (outputDiv) {
+      highlightCodeBlocks(outputDiv);
     }
-
-    // Reset state
-    state.inBlock = false;
-    state.language = '';
-    state.lines = [];
-    state.blockElement = null;
-    return true;
-  }
-
-  // If we're inside a code block, accumulate lines
-  if (state.inBlock) {
-    state.lines.push(lineText);
-    // Remove the line element since we're accumulating in the block
-    if (lineEl && lineEl.parentNode) {
-      lineEl.remove();
-    }
-    return true;
-  }
-
-  return false;
+  }, 500));
 }
+
+function highlightCodeBlocks(outputDiv) {
+  if (typeof hljs === 'undefined') {
+    console.warn('[hljs] highlight.js not loaded!');
+    return;
+  }
+
+  const children = Array.from(outputDiv.children);
+  let i = 0;
+  let replacements = 0;
+
+  while (i < children.length) {
+    const el = children[i];
+
+    // Skip non-console-line elements (already processed code blocks, etc.)
+    if (!el.classList || !el.classList.contains('console-line')) {
+      i++;
+      continue;
+    }
+
+    // Skip already processed
+    if (el.dataset.hljsDone) {
+      i++;
+      continue;
+    }
+
+    // Skip lines still being typed
+    if (el.classList.contains('typing')) {
+      i++;
+      continue;
+    }
+
+    const text = (el.textContent || '').trim();
+
+    // Look for opening ``` (with optional language)
+    const startMatch = text.match(/^```(\w*)$/);
+    if (startMatch) {
+      const language = startMatch[1] || '';
+      const codeLines = [];
+      const toHide = [el];
+
+      // Look ahead for closing ```
+      let j = i + 1;
+      let found = false;
+      while (j < children.length) {
+        const child = children[j];
+        if (!child.classList || !child.classList.contains('console-line')) {
+          j++;
+          continue;
+        }
+        // Skip lines still being typed
+        if (child.classList.contains('typing')) break;
+
+        const childText = (child.textContent || '').trim();
+        if (childText.match(/^```$/)) {
+          toHide.push(child);
+          found = true;
+          break;
+        }
+        codeLines.push(child.textContent || '');
+        toHide.push(child);
+        j++;
+      }
+
+      if (found && codeLines.length > 0) {
+        // Build highlighted code block
+        const container = document.createElement('div');
+        container.className = 'code-block-container';
+        const pre = document.createElement('pre');
+        const codeEl = document.createElement('code');
+        if (language) {
+          codeEl.className = `language-${language}`;
+        }
+        codeEl.textContent = codeLines.join('\n');
+        pre.appendChild(codeEl);
+        container.appendChild(pre);
+
+        try {
+          hljs.highlightElement(codeEl);
+        } catch (e) {
+          console.warn('[hljs] highlightElement error:', e);
+        }
+
+        // Insert before the opening marker, then hide all raw lines
+        el.parentNode.insertBefore(container, el);
+        toHide.forEach(h => { h.style.display = 'none'; h.dataset.hljsDone = '1'; });
+        replacements++;
+
+        i = j + 1;
+        continue;
+      }
+
+      // Opening ``` found but no closing yet — skip, will retry
+      i++;
+      continue;
+    }
+
+    // Inline code: `code` backtick patterns
+    if (text.includes('`') && !text.startsWith('```')) {
+      const original = el.textContent;
+      const html = original.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+      if (html !== original) {
+        el.innerHTML = html;
+      }
+    }
+
+    el.dataset.hljsDone = '1';
+    i++;
+  }
+
+  if (replacements > 0) {
+    console.log(`[hljs] Highlighted ${replacements} code block(s)`);
+  }
+}
+
 
 function sendPrompt(agentId) {
   const input = document.getElementById(`input-${agentId}`);
