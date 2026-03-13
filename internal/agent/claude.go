@@ -242,12 +242,11 @@ func (a *Agent) sendEnvelope(env *protocol.Envelope) error {
 		return err
 	}
 	a.mu.Lock()
-	conn := a.conn
-	a.mu.Unlock()
-	if conn == nil {
+	defer a.mu.Unlock()
+	if a.conn == nil {
 		return fmt.Errorf("not connected")
 	}
-	return conn.WriteMessage(websocket.TextMessage, data)
+	return a.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (a *Agent) backoffSleep(ctx context.Context) {

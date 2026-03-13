@@ -32,6 +32,7 @@ const agentCountEl = document.getElementById('agent-count');
 const dialog = document.getElementById('agent-config-dialog');
 const agentNameInput = document.getElementById('agent-name');
 const newProjectDialog = document.getElementById('new-project-dialog');
+const projectNameInput = document.getElementById('project-name-input');
 const projectGithubUrlInput = document.getElementById('project-github-url');
 let currentProjectGithubUrl = ''; // stored URL from the current project
 const tabBar = document.getElementById('tab-bar');
@@ -267,10 +268,13 @@ function connectWebSocket() {
     isConnected = false;
     updateConnectionStatus();
 
-    // Attempt to reconnect after 3 seconds
+    // Only auto-reconnect if this is still the active WebSocket
+    const closedWs = ws;
     setTimeout(() => {
-      console.log('Attempting to reconnect...');
-      connectWebSocket();
+      if (ws === closedWs) {
+        console.log('Attempting to reconnect...');
+        connectWebSocket();
+      }
     }, 3000);
   };
 }
@@ -1412,11 +1416,12 @@ function escapeHtml(text) {
 // --- New Project Dialog ---
 function showNewProjectDialog() {
   newProjectDialog.style.display = 'flex';
-  projectGithubUrlInput.focus();
+  projectNameInput.focus();
 }
 
 function hideNewProjectDialog() {
   newProjectDialog.style.display = 'none';
+  projectNameInput.value = '';
   projectGithubUrlInput.value = '';
 }
 
@@ -1424,7 +1429,13 @@ document.getElementById('close-new-project-dialog').addEventListener('click', hi
 document.getElementById('cancel-new-project-dialog').addEventListener('click', hideNewProjectDialog);
 
 document.getElementById('confirm-new-project').addEventListener('click', async () => {
+  const projectName = projectNameInput.value.trim();
   const githubUrl = projectGithubUrlInput.value.trim();
+
+  if (!projectName) {
+    alert('Please enter a project name');
+    return;
+  }
 
   if (!githubUrl) {
     alert('Please enter a Git repository URL');
@@ -1443,7 +1454,7 @@ document.getElementById('confirm-new-project').addEventListener('click', async (
   hideNewProjectDialog();
 
   try {
-    const result = await window.electronAPI.newProject({ githubUrl });
+    const result = await window.electronAPI.newProject({ projectName, githubUrl });
     if (result.success) {
       // Clear all agents from UI
       for (const [agentId] of agents) {

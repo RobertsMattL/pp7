@@ -54,6 +54,19 @@ function getReposDir() {
   return settings.repoRoot || path.join(app.getPath('userData'), 'repos');
 }
 
+function getCurrentProjectName() {
+  try {
+    if (currentProjectPath && fs.existsSync(currentProjectPath)) {
+      const data = fs.readFileSync(currentProjectPath, 'utf8');
+      const project = JSON.parse(data);
+      return project.name || null;
+    }
+  } catch (err) {
+    console.error('Failed to get project name:', err);
+  }
+  return null;
+}
+
 // Agent config persistence (legacy - for migration)
 const AGENTS_FILE = () => path.join(app.getPath('userData'), 'agents.json');
 const DEFAULT_PROJECT_PATH = () => path.join(app.getPath('userData'), 'default-project.ppproject');
@@ -322,11 +335,11 @@ function createWindow() {
 
 // IPC: Create new project
 ipcMain.handle('new-project', async (event, config) => {
-  const { githubUrl } = config || {};
+  const { projectName, githubUrl } = config || {};
 
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Create New Project',
-    defaultPath: path.join(app.getPath('documents'), 'Untitled.ppproject'),
+    defaultPath: path.join(app.getPath('documents'), `${projectName || 'Untitled'}.ppproject`),
     filters: [
       { name: 'ParallelAgents Project', extensions: ['ppproject'] }
     ]
@@ -337,10 +350,10 @@ ipcMain.handle('new-project', async (event, config) => {
   }
 
   const projectPath = result.filePath;
-  const projectName = path.basename(projectPath, '.ppproject');
+  const finalProjectName = projectName || path.basename(projectPath, '.ppproject');
 
   const project = {
-    name: projectName,
+    name: finalProjectName,
     version: '1.0',
     created: new Date().toISOString(),
     modified: new Date().toISOString(),
@@ -910,14 +923,16 @@ ipcMain.handle('clone-and-start-agent', async (event, config) => {
       }
     }
 
-    // Create repos directory if it doesn't exist
+    // Create repos directory if it doesn't exist, nested under project name
     const reposDir = getReposDir();
-    if (!fs.existsSync(reposDir)) {
-      fs.mkdirSync(reposDir, { recursive: true });
+    const projectName = getCurrentProjectName();
+    const projectReposDir = projectName ? path.join(reposDir, projectName) : reposDir;
+    if (!fs.existsSync(projectReposDir)) {
+      fs.mkdirSync(projectReposDir, { recursive: true });
     }
 
     // Use the agent name as the directory name (falls back to repo name)
-    const repoPath = path.join(reposDir, finalAgentName);
+    const repoPath = path.join(projectReposDir, finalAgentName);
 
     const timestamp = Date.now();
     const tempAgentId = `temp-${timestamp}`;

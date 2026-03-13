@@ -72,7 +72,9 @@
       "Bash(curl -sL \"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css\" -o /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/github-dark.min.css && ls -la /Users/matthewroberts/development/projects/ParallelAgents/boss-node/public/vendor/)",
       "Bash(grep -r \"interface\\\\|type.*=\\\\|class.*Agent\\\\|class.*Project\" /Users/matthewroberts/development/projects/ParallelAgents --include=\"*.ts\" --include=\"*.tsx\" 2>/dev/null | head -20)",
       "Bash(git add:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(find /Users/matthewroberts/development/projects/ParallelAgents/boss-node/src -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.jsx\" -o -name \"*.js\" \\\\\\) ! -path \"*/node_modules/*\" 2>/dev/null | sort)",
+      "Bash(find /Users/matthewroberts/development/projects/ParallelAgents/web-viz/src -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.jsx\" -o -name \"*.js\" \\\\\\) ! -path \"*/node_modules/*\" 2>/dev/null | sort)"
     ]
   }
 }
