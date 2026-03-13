@@ -30,8 +30,10 @@ const noAgentsView = document.getElementById('no-agents');
 const connectionStatus = document.getElementById('connection-status');
 const agentCountEl = document.getElementById('agent-count');
 const dialog = document.getElementById('agent-config-dialog');
-const githubUrlInput = document.getElementById('github-url');
 const agentNameInput = document.getElementById('agent-name');
+const newProjectDialog = document.getElementById('new-project-dialog');
+const projectGithubUrlInput = document.getElementById('project-github-url');
+let currentProjectGithubUrl = ''; // stored URL from the current project
 const tabBar = document.getElementById('tab-bar');
 const terminalContainer = document.getElementById('terminal-container');
 
@@ -49,6 +51,16 @@ async function init() {
       }
     });
     persistDeviceAssignments();
+  }
+
+  // Load current project's github URL
+  try {
+    const projectInfo = await window.electronAPI.getCurrentProject();
+    if (projectInfo.success && projectInfo.githubUrl) {
+      currentProjectGithubUrl = projectInfo.githubUrl;
+    }
+  } catch (e) {
+    console.log('No current project loaded');
   }
 
   // Start polling for ADB devices
@@ -1404,33 +1416,22 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function showAgentDialog() {
-  dialog.style.display = 'flex';
-  githubUrlInput.focus();
+// --- New Project Dialog ---
+function showNewProjectDialog() {
+  newProjectDialog.style.display = 'flex';
+  projectGithubUrlInput.focus();
 }
 
-function hideAgentDialog() {
-  dialog.style.display = 'none';
-  githubUrlInput.value = '';
-  agentNameInput.value = '';
+function hideNewProjectDialog() {
+  newProjectDialog.style.display = 'none';
+  projectGithubUrlInput.value = '';
 }
 
-// Dialog handlers
-window.electronAPI.onShowAgentConfigDialog(() => {
-  showAgentDialog();
-});
+document.getElementById('close-new-project-dialog').addEventListener('click', hideNewProjectDialog);
+document.getElementById('cancel-new-project-dialog').addEventListener('click', hideNewProjectDialog);
 
-// "+ Agent" button opens the same dialog
-document.getElementById('add-agent-btn').addEventListener('click', () => {
-  showAgentDialog();
-});
-
-document.getElementById('close-dialog').addEventListener('click', hideAgentDialog);
-document.getElementById('cancel-dialog').addEventListener('click', hideAgentDialog);
-
-document.getElementById('create-agent').addEventListener('click', async () => {
-  const githubUrl = githubUrlInput.value.trim();
-  const agentName = agentNameInput.value.trim();
+document.getElementById('confirm-new-project').addEventListener('click', async () => {
+  const githubUrl = projectGithubUrlInput.value.trim();
 
   if (!githubUrl) {
     alert('Please enter a Git repository URL');
@@ -1446,13 +1447,72 @@ document.getElementById('create-agent').addEventListener('click', async () => {
     return;
   }
 
+  hideNewProjectDialog();
+
+  try {
+    const result = await window.electronAPI.newProject({ githubUrl });
+    if (result.success) {
+      // Clear all agents from UI
+      for (const [agentId] of agents) {
+        removeAgentTab(agentId);
+        removeAgentConsole(agentId);
+      }
+      agents.clear();
+      agentCountEl.textContent = '0 Agents';
+      noAgentsView.style.display = 'flex';
+      currentProjectGithubUrl = githubUrl;
+
+      console.log('New project created:', result.projectPath);
+    }
+  } catch (err) {
+    console.error('Failed to create new project:', err);
+    alert(`Failed to create project: ${err.message}`);
+  }
+});
+
+// --- Add Agent Dialog ---
+function showAgentDialog() {
+  if (!currentProjectGithubUrl) {
+    alert('Please create or open a project first.');
+    return;
+  }
+  dialog.style.display = 'flex';
+  agentNameInput.focus();
+}
+
+function hideAgentDialog() {
+  dialog.style.display = 'none';
+  agentNameInput.value = '';
+}
+
+// Dialog handlers
+window.electronAPI.onShowAgentConfigDialog(() => {
+  showAgentDialog();
+});
+
+// "+ Agent" button opens the agent name dialog
+document.getElementById('add-agent-btn').addEventListener('click', () => {
+  showAgentDialog();
+});
+
+document.getElementById('close-dialog').addEventListener('click', hideAgentDialog);
+document.getElementById('cancel-dialog').addEventListener('click', hideAgentDialog);
+
+document.getElementById('create-agent').addEventListener('click', async () => {
+  const agentName = agentNameInput.value.trim();
+
+  if (!agentName) {
+    alert('Please enter an agent name');
+    return;
+  }
+
   // Close dialog
   hideAgentDialog();
 
   try {
-    // Call main process to clone repo
+    // Call main process to clone repo using the project's URL
     const result = await window.electronAPI.cloneAndStartAgent({
-      githubUrl,
+      githubUrl: currentProjectGithubUrl,
       agentName,
     });
 
@@ -1506,28 +1566,7 @@ window.electronAPI.onAgentOutput((data) => {
 
 // Listen for new project command
 window.electronAPI.onNewProject(async () => {
-  const confirm = window.confirm('Create a new project? This will close all current agents.');
-  if (!confirm) return;
-
-  try {
-    const result = await window.electronAPI.newProject();
-    if (result.success) {
-      // Clear all agents from UI
-      for (const [agentId] of agents) {
-        removeAgentTab(agentId);
-        removeAgentConsole(agentId);
-      }
-      agents.clear();
-      agentCountEl.textContent = '0 Agents';
-      noAgentsView.style.display = 'flex';
-
-      console.log('New project created:', result.projectPath);
-      alert(`New project created: ${result.projectName}`);
-    }
-  } catch (err) {
-    console.error('Failed to create new project:', err);
-    alert(`Failed to create project: ${err.message}`);
-  }
+  showNewProjectDialog();
 });
 
 // Listen for open project command
@@ -1544,6 +1583,7 @@ window.electronAPI.onOpenProject(async () => {
 
       console.log('Project opened:', result.projectPath);
       console.log('Agents in project:', result.agents);
+      currentProjectGithubUrl = result.githubUrl || '';
 
       // Restore agents from project
       if (result.agents && result.agents.length > 0) {

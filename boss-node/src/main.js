@@ -241,7 +241,7 @@ function createWindow() {
         },
         { type: 'separator' },
         {
-          label: 'New Agent from GitHub',
+          label: 'Add Agent',
           click: () => {
             mainWindow.webContents.send('show-agent-config-dialog');
           },
@@ -288,7 +288,9 @@ function createWindow() {
 }
 
 // IPC: Create new project
-ipcMain.handle('new-project', async () => {
+ipcMain.handle('new-project', async (event, config) => {
+  const { githubUrl } = config || {};
+
   const result = await dialog.showSaveDialog(mainWindow, {
     title: 'Create New Project',
     defaultPath: path.join(app.getPath('documents'), 'Untitled.ppproject'),
@@ -309,6 +311,7 @@ ipcMain.handle('new-project', async () => {
     version: '1.0',
     created: new Date().toISOString(),
     modified: new Date().toISOString(),
+    githubUrl: githubUrl || '',
     agents: []
   };
 
@@ -364,6 +367,7 @@ ipcMain.handle('open-project', async () => {
       success: true,
       projectPath,
       projectName: project.name,
+      githubUrl: project.githubUrl || '',
       agents: project.agents || []
     };
   } catch (err) {
@@ -424,6 +428,7 @@ ipcMain.handle('get-current-project', async () => {
       success: true,
       projectPath: currentProjectPath,
       projectName: project.name,
+      githubUrl: project.githubUrl || '',
       agentCount: project.agents ? project.agents.length : 0
     };
   } catch (err) {

@@ -39,7 +39,7 @@
       <div class="no-agents" id="no-agents">
         <div class="no-agents-message">
           <h2>No Agents Connected</h2>
-          <p>Click <strong>+ Agent</strong> or use <strong>File &rarr; New Agent from GitHub</strong> to clone a repository and start an agent.</p>
+          <p>Click <strong>+ Agent</strong> to add an agent, or use <strong>File &rarr; New Project</strong> to create a new project with a repository URL.</p>
         </div>
       </div>
       <!-- Agent consoles will be dynamically added here -->
@@ -49,36 +49,52 @@
     <div class="terminal-container" id="terminal-container" style="display: none;"></div>
   </div>
 
-  <!-- Agent Configuration Dialog -->
-  <div id="agent-config-dialog" class="dialog-overlay" style="display: none;">
+  <!-- New Project Dialog -->
+  <div id="new-project-dialog" class="dialog-overlay" style="display: none;">
     <div class="dialog">
       <div class="dialog-header">
-        <h2>New Agent from GitHub</h2>
-        <button class="close-btn" id="close-dialog">&times;</button>
+        <h2>New Project</h2>
+        <button class="close-btn" id="close-new-project-dialog">&times;</button>
       </div>
       <div class="dialog-content">
         <div class="form-group">
-          <label for="github-url">Git Repository URL</label>
+          <label for="project-github-url">Git Repository URL</label>
           <input
             type="text"
-            id="github-url"
+            id="project-github-url"
             placeholder="https://github.com/user/repo.git or git@github.com:user/repo.git"
             autocomplete="off"
           >
         </div>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-secondary" id="cancel-new-project-dialog">Cancel</button>
+        <button class="btn btn-primary" id="confirm-new-project">Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Agent Dialog -->
+  <div id="agent-config-dialog" class="dialog-overlay" style="display: none;">
+    <div class="dialog">
+      <div class="dialog-header">
+        <h2>Add Agent</h2>
+        <button class="close-btn" id="close-dialog">&times;</button>
+      </div>
+      <div class="dialog-content">
         <div class="form-group">
-          <label for="agent-name">Agent Name (optional)</label>
+          <label for="agent-name">Agent Name</label>
           <input
             type="text"
             id="agent-name"
-            placeholder="Leave empty to use repository name"
+            placeholder="Enter a name for this agent"
             autocomplete="off"
           >
         </div>
       </div>
       <div class="dialog-footer">
         <button class="btn btn-secondary" id="cancel-dialog">Cancel</button>
-        <button class="btn btn-primary" id="create-agent">Clone & Create Agent</button>
+        <button class="btn btn-primary" id="create-agent">Create Agent</button>
       </div>
     </div>
   </div>

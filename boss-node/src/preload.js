@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitPull: (data) => ipcRenderer.invoke('git-pull', data),
 
   // Project management
-  newProject: () => ipcRenderer.invoke('new-project'),
+  newProject: (config) => ipcRenderer.invoke('new-project', config),
   openProject: () => ipcRenderer.invoke('open-project'),
   saveProjectAs: () => ipcRenderer.invoke('save-project-as'),
   getCurrentProject: () => ipcRenderer.invoke('get-current-project'),
