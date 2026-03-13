@@ -63,7 +63,8 @@
       "Read(//Users/matthewroberts/Library/**)",
       "Read(//Users/matthewroberts/**)",
       "Bash(unset:*)",
-      "Bash(claude setup-token:*)"
+      "Bash(claude setup-token:*)",
+      "Bash(env)"
     ]
   }
 }
