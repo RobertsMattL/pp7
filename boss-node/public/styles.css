@@ -156,8 +156,58 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+/* Nested subtabs for directories/submodules */
+.subtab-bar {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.subtab {
+  padding: 6px 12px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.subtab:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.subtab.active {
+  background-color: var(--accent-color);
+  color: white;
+  border-color: var(--accent-color);
+}
+
+.terminal-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.terminal-pane {
+  flex: 1;
+  display: none;
   padding: 4px;
   overflow: hidden;
+}
+
+.terminal-pane.active {
+  display: flex;
+  flex-direction: column;
 }
 
 .terminal-view .xterm {

@@ -48,7 +48,11 @@
       "Bash(echo:*)",
       "Bash(xattr:*)",
       "Bash(timeout 10 npx electron:*)",
-      "Read(//Users/matthewroberts/Library/Application Support/parallelagents-boss-node/**)"
+      "Read(//Users/matthewroberts/Library/Application Support/parallelagents-boss-node/**)",
+      "Bash(pkill:*)",
+      "Bash(cat:*)",
+      "Bash(git submodule:*)",
+      "Bash(timeout 15 npx electron:*)"
     ]
   }
 }

@@ -20,8 +20,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Git info and sync
   getGitInfo: (repoPath) => ipcRenderer.invoke('get-git-info', repoPath),
+  getGitSubmodules: (repoPath) => ipcRenderer.invoke('get-git-submodules', repoPath),
   gitPush: (data) => ipcRenderer.invoke('git-push', data),
   gitPull: (data) => ipcRenderer.invoke('git-pull', data),
+
+  // Project management
+  newProject: () => ipcRenderer.invoke('new-project'),
+  openProject: () => ipcRenderer.invoke('open-project'),
+  saveProjectAs: () => ipcRenderer.invoke('save-project-as'),
+  getCurrentProject: () => ipcRenderer.invoke('get-current-project'),
 
   // Terminal
   createTerminal: (data) => ipcRenderer.invoke('create-terminal', data),
@@ -44,6 +51,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onBuildOutput: (callback) => {
     ipcRenderer.on('build-output', (event, data) => callback(data));
+  },
+  onNewProject: (callback) => {
+    ipcRenderer.on('new-project', () => callback());
+  },
+  onOpenProject: (callback) => {
+    ipcRenderer.on('open-project', () => callback());
+  },
+  onSaveProjectAs: (callback) => {
+    ipcRenderer.on('save-project-as', () => callback());
   },
 
   // Cleanup

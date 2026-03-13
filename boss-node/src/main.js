@@ -7,6 +7,7 @@ const pty = require('node-pty');
 let mainWindow;
 const agents = new Map(); // agentId -> { process, repoPath, ... }
 const terminals = new Map(); // agentId -> pty process
+let currentProjectPath = null; // Path to the current project file
 
 // Console persistence
 const CONSOLES_FILE = () => path.join(app.getPath('userData'), 'consoles.json');
@@ -28,16 +29,79 @@ function saveConsoles(consoles) {
   fs.writeFileSync(CONSOLES_FILE(), JSON.stringify(consoles, null, 2), 'utf8');
 }
 
-// Agent config persistence
+// Agent config persistence (legacy - for migration)
 const AGENTS_FILE = () => path.join(app.getPath('userData'), 'agents.json');
+const DEFAULT_PROJECT_PATH = () => path.join(app.getPath('userData'), 'default-project.ppproject');
 
 function loadSavedAgents() {
+  // First check if we have a current project loaded
+  if (currentProjectPath && fs.existsSync(currentProjectPath)) {
+    return loadProjectAgents(currentProjectPath);
+  }
+
+  // Try to load default project
+  if (fs.existsSync(DEFAULT_PROJECT_PATH())) {
+    currentProjectPath = DEFAULT_PROJECT_PATH();
+    return loadProjectAgents(currentProjectPath);
+  }
+
+  // Migration: Check for old agents.json file
+  if (fs.existsSync(AGENTS_FILE())) {
+    console.log('Migrating from agents.json to project format...');
+    const agents = migrateFromAgentsJson();
+    return agents;
+  }
+
+  return [];
+}
+
+function migrateFromAgentsJson() {
   try {
     const data = fs.readFileSync(AGENTS_FILE(), 'utf8');
-    return JSON.parse(data);
-  } catch {
+    const agents = JSON.parse(data);
+
+    // Create a default project with these agents
+    const project = {
+      name: 'Default Project',
+      version: '1.0',
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      agents: agents
+    };
+
+    // Save as default project
+    saveProject(DEFAULT_PROJECT_PATH(), project);
+    currentProjectPath = DEFAULT_PROJECT_PATH();
+
+    // Rename old agents.json to agents.json.backup
+    fs.renameSync(AGENTS_FILE(), AGENTS_FILE() + '.backup');
+    console.log('Migration complete. Old agents.json backed up.');
+
+    return agents;
+  } catch (err) {
+    console.error('Migration failed:', err);
     return [];
   }
+}
+
+function loadProjectAgents(projectPath) {
+  try {
+    const data = fs.readFileSync(projectPath, 'utf8');
+    const project = JSON.parse(data);
+    return project.agents || [];
+  } catch (err) {
+    console.error('Failed to load project:', err);
+    return [];
+  }
+}
+
+function saveProject(projectPath, project) {
+  const dir = path.dirname(projectPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  project.modified = new Date().toISOString();
+  fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf8');
 }
 
 function saveAgentConfig(agentName, repoPath, githubUrl) {
@@ -50,21 +114,42 @@ function saveAgentConfig(agentName, repoPath, githubUrl) {
   } else {
     saved.push(entry);
   }
-  const dir = path.dirname(AGENTS_FILE());
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+
+  // Save to current project
+  const projectPath = currentProjectPath || DEFAULT_PROJECT_PATH();
+  let project;
+
+  if (fs.existsSync(projectPath)) {
+    const data = fs.readFileSync(projectPath, 'utf8');
+    project = JSON.parse(data);
+  } else {
+    project = {
+      name: 'Default Project',
+      version: '1.0',
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      agents: []
+    };
   }
-  fs.writeFileSync(AGENTS_FILE(), JSON.stringify(saved, null, 2), 'utf8');
+
+  project.agents = saved;
+  saveProject(projectPath, project);
+  currentProjectPath = projectPath;
 }
 
 function removeAgentConfig(agentName) {
   const saved = loadSavedAgents().filter(a => a.name !== agentName);
-  const dir = path.dirname(AGENTS_FILE());
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+
+  // Save to current project
+  const projectPath = currentProjectPath || DEFAULT_PROJECT_PATH();
+  if (fs.existsSync(projectPath)) {
+    const data = fs.readFileSync(projectPath, 'utf8');
+    const project = JSON.parse(data);
+    project.agents = saved;
+    saveProject(projectPath, project);
   }
-  fs.writeFileSync(AGENTS_FILE(), JSON.stringify(saved, null, 2), 'utf8');
-  console.log(`Removed agent "${agentName}" from saved agents`);
+
+  console.log(`Removed agent "${agentName}" from project`);
 }
 
 function restoreSavedAgents() {
@@ -88,6 +173,25 @@ function restoreSavedAgents() {
 
     const tempAgentId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     console.log(`Restoring agent "${name}" from ${repoPath}`);
+
+    // Update submodules in background when restoring (don't block on this)
+    const gitSubmodule = spawn('git', ['submodule', 'update', '--init', '--recursive'], {
+      cwd: repoPath
+    });
+
+    gitSubmodule.on('close', (code) => {
+      if (code === 0) {
+        console.log(`Submodules updated for "${name}"`);
+      } else {
+        console.log(`Submodule update for "${name}" completed with code ${code}`);
+      }
+    });
+
+    gitSubmodule.on('error', (err) => {
+      console.error(`Submodule update error for "${name}":`, err.message);
+    });
+
+    // Start agent process (don't wait for submodules)
     startAgentProcess(tempAgentId, name, repoPath, githubUrl || '', true);
   }
 }
@@ -111,6 +215,28 @@ function createWindow() {
     {
       label: 'File',
       submenu: [
+        {
+          label: 'New Project',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => {
+            mainWindow.webContents.send('new-project');
+          },
+        },
+        {
+          label: 'Open Project...',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => {
+            mainWindow.webContents.send('open-project');
+          },
+        },
+        {
+          label: 'Save Project As...',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          click: () => {
+            mainWindow.webContents.send('save-project-as');
+          },
+        },
+        { type: 'separator' },
         {
           label: 'New Agent from GitHub',
           click: () => {
@@ -157,6 +283,147 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// IPC: Create new project
+ipcMain.handle('new-project', async () => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Create New Project',
+    defaultPath: path.join(app.getPath('documents'), 'Untitled.ppproject'),
+    filters: [
+      { name: 'ParallelAgents Project', extensions: ['ppproject'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { success: false, canceled: true };
+  }
+
+  const projectPath = result.filePath;
+  const projectName = path.basename(projectPath, '.ppproject');
+
+  const project = {
+    name: projectName,
+    version: '1.0',
+    created: new Date().toISOString(),
+    modified: new Date().toISOString(),
+    agents: []
+  };
+
+  saveProject(projectPath, project);
+  currentProjectPath = projectPath;
+
+  // Stop all current agents
+  for (const [agentId, agent] of agents) {
+    if (agent.process && !agent.process.killed) {
+      agent.process.kill();
+    }
+  }
+  agents.clear();
+
+  return { success: true, projectPath, projectName };
+});
+
+// IPC: Open existing project
+ipcMain.handle('open-project', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Open Project',
+    defaultPath: app.getPath('documents'),
+    filters: [
+      { name: 'ParallelAgents Project', extensions: ['ppproject'] }
+    ],
+    properties: ['openFile']
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { success: false, canceled: true };
+  }
+
+  const projectPath = result.filePaths[0];
+
+  try {
+    const data = fs.readFileSync(projectPath, 'utf8');
+    const project = JSON.parse(data);
+
+    currentProjectPath = projectPath;
+
+    // Stop all current agents
+    for (const [agentId, agent] of agents) {
+      if (agent.process && !agent.process.killed) {
+        agent.process.kill();
+      }
+    }
+    agents.clear();
+
+    return {
+      success: true,
+      projectPath,
+      projectName: project.name,
+      agents: project.agents || []
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// IPC: Save project as
+ipcMain.handle('save-project-as', async () => {
+  const currentAgents = loadSavedAgents();
+
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Project As',
+    defaultPath: path.join(app.getPath('documents'), 'Project.ppproject'),
+    filters: [
+      { name: 'ParallelAgents Project', extensions: ['ppproject'] }
+    ]
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { success: false, canceled: true };
+  }
+
+  const projectPath = result.filePath;
+  const projectName = path.basename(projectPath, '.ppproject');
+
+  let project;
+  if (currentProjectPath && fs.existsSync(currentProjectPath)) {
+    const data = fs.readFileSync(currentProjectPath, 'utf8');
+    project = JSON.parse(data);
+    project.name = projectName;
+  } else {
+    project = {
+      name: projectName,
+      version: '1.0',
+      created: new Date().toISOString(),
+      modified: new Date().toISOString(),
+      agents: currentAgents
+    };
+  }
+
+  saveProject(projectPath, project);
+  currentProjectPath = projectPath;
+
+  return { success: true, projectPath, projectName };
+});
+
+// IPC: Get current project info
+ipcMain.handle('get-current-project', async () => {
+  if (!currentProjectPath || !fs.existsSync(currentProjectPath)) {
+    return { success: false, noProject: true };
+  }
+
+  try {
+    const data = fs.readFileSync(currentProjectPath, 'utf8');
+    const project = JSON.parse(data);
+    return {
+      success: true,
+      projectPath: currentProjectPath,
+      projectName: project.name,
+      agentCount: project.agents ? project.agents.length : 0
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
 
 app.whenReady().then(() => {
   createWindow();
@@ -465,6 +732,49 @@ ipcMain.handle('build-and-launch', async (event, { consoleId, deviceSerial, proj
   });
 });
 
+// IPC: Get git submodules for a repo
+ipcMain.handle('get-git-submodules', async (event, repoPath) => {
+  if (!repoPath || !fs.existsSync(repoPath)) {
+    return [];
+  }
+  try {
+    // Check if .gitmodules exists
+    const gitmodulesPath = path.join(repoPath, '.gitmodules');
+    if (!fs.existsSync(gitmodulesPath)) {
+      return [];
+    }
+
+    // Get list of submodules using git submodule status
+    const output = execSync('git submodule status', { cwd: repoPath, encoding: 'utf8', timeout: 5000 });
+    // Don't trim the output - the leading space/+/- on each line indicates submodule status
+    const lines = output.split('\n').filter(line => line.trim());
+
+    const submodules = lines.map(line => {
+      // Format: " <commit> <path> (<describe>)" or "-<commit> <path> (<describe>)" if not initialized
+      // Don't trim before matching - the leading character indicates status
+      const match = line.match(/^[+-\s]([a-f0-9]+)\s+(\S+)(?:\s+\(([^)]+)\))?/);
+      if (match) {
+        const [, commit, subPath, describe] = match;
+        const fullPath = path.join(repoPath, subPath);
+        const name = path.basename(subPath);
+        return {
+          name,
+          path: subPath,
+          fullPath,
+          commit: commit.substring(0, 7),
+          initialized: fs.existsSync(path.join(fullPath, '.git'))
+        };
+      }
+      return null;
+    }).filter(Boolean);
+
+    return submodules;
+  } catch (err) {
+    console.error('Failed to get git submodules:', err);
+    return [];
+  }
+});
+
 // IPC: Get git commit info for a repo path
 ipcMain.handle('get-git-info', async (event, repoPath) => {
   if (!repoPath || !fs.existsSync(repoPath)) {
@@ -547,14 +857,59 @@ ipcMain.handle('clone-and-start-agent', async (event, config) => {
     const repoAlreadyExists = fs.existsSync(repoPath) && fs.existsSync(path.join(repoPath, '.git'));
 
     if (repoAlreadyExists) {
-      // Skip cloning, just notify and start the agent
+      // Skip cloning, just notify and update submodules
       mainWindow.webContents.send('agent-output', {
         agentId: tempAgentId,
         output: `Repository already exists at ${repoPath} — skipping clone.\n`,
         type: 'system',
       });
 
-      startAgentProcess(tempAgentId, finalAgentName, repoPath, githubUrl);
+      // Update submodules
+      mainWindow.webContents.send('agent-output', {
+        agentId: tempAgentId,
+        output: `Updating git submodules...\n`,
+        type: 'system',
+      });
+
+      const gitSubmodule = spawn('git', ['submodule', 'update', '--init', '--recursive'], {
+        cwd: repoPath
+      });
+
+      gitSubmodule.stdout.on('data', (data) => {
+        mainWindow.webContents.send('agent-output', {
+          agentId: tempAgentId,
+          output: data.toString(),
+          type: 'git',
+        });
+      });
+
+      gitSubmodule.stderr.on('data', (data) => {
+        mainWindow.webContents.send('agent-output', {
+          agentId: tempAgentId,
+          output: data.toString(),
+          type: 'git',
+        });
+      });
+
+      gitSubmodule.on('close', (code) => {
+        if (code === 0) {
+          mainWindow.webContents.send('agent-output', {
+            agentId: tempAgentId,
+            output: `✓ Submodules updated successfully\n`,
+            type: 'system',
+          });
+        }
+        startAgentProcess(tempAgentId, finalAgentName, repoPath, githubUrl);
+      });
+
+      gitSubmodule.on('error', (err) => {
+        mainWindow.webContents.send('agent-output', {
+          agentId: tempAgentId,
+          output: `⚠ Git submodule error: ${err.message}\n`,
+          type: 'system',
+        });
+        startAgentProcess(tempAgentId, finalAgentName, repoPath, githubUrl);
+      });
 
       return { agentId: tempAgentId, repoPath, agentName: finalAgentName };
     }
@@ -597,9 +952,63 @@ ipcMain.handle('clone-and-start-agent', async (event, config) => {
           type: 'system',
         });
 
-        startAgentProcess(tempAgentId, finalAgentName, repoPath, githubUrl);
+        // Initialize submodules recursively
+        mainWindow.webContents.send('agent-output', {
+          agentId: tempAgentId,
+          output: `Initializing git submodules...\n`,
+          type: 'system',
+        });
 
-        resolve({ agentId: tempAgentId, repoPath, agentName: finalAgentName });
+        const gitSubmodule = spawn('git', ['submodule', 'update', '--init', '--recursive'], {
+          cwd: repoPath
+        });
+
+        gitSubmodule.stdout.on('data', (data) => {
+          mainWindow.webContents.send('agent-output', {
+            agentId: tempAgentId,
+            output: data.toString(),
+            type: 'git',
+          });
+        });
+
+        gitSubmodule.stderr.on('data', (data) => {
+          mainWindow.webContents.send('agent-output', {
+            agentId: tempAgentId,
+            output: data.toString(),
+            type: 'git',
+          });
+        });
+
+        gitSubmodule.on('close', (submoduleCode) => {
+          if (submoduleCode === 0) {
+            mainWindow.webContents.send('agent-output', {
+              agentId: tempAgentId,
+              output: `✓ Submodules initialized successfully\n`,
+              type: 'system',
+            });
+          } else {
+            mainWindow.webContents.send('agent-output', {
+              agentId: tempAgentId,
+              output: `⚠ Submodule initialization completed with code ${submoduleCode}\n`,
+              type: 'system',
+            });
+          }
+
+          // Start agent regardless of submodule status
+          startAgentProcess(tempAgentId, finalAgentName, repoPath, githubUrl);
+          resolve({ agentId: tempAgentId, repoPath, agentName: finalAgentName });
+        });
+
+        gitSubmodule.on('error', (err) => {
+          mainWindow.webContents.send('agent-output', {
+            agentId: tempAgentId,
+            output: `⚠ Git submodule error: ${err.message}\n`,
+            type: 'system',
+          });
+          // Start agent anyway even if submodules fail
+          startAgentProcess(tempAgentId, finalAgentName, repoPath, githubUrl);
+          resolve({ agentId: tempAgentId, repoPath, agentName: finalAgentName });
+        });
       });
 
       gitClone.on('error', (err) => {
@@ -772,7 +1181,7 @@ ipcMain.handle('send-prompt-to-agent', async (event, { agentId, prompt }) => {
 });
 
 // IPC: Create a PTY terminal for an agent
-ipcMain.handle('create-terminal', async (event, { agentId, cwd, cols, rows }) => {
+ipcMain.handle('create-terminal', async (event, { agentId, cwd, cols, rows, command }) => {
   // Kill existing terminal for this agent if any
   if (terminals.has(agentId)) {
     terminals.get(agentId).kill();
@@ -805,6 +1214,7 @@ ipcMain.handle('create-terminal', async (event, { agentId, cwd, cols, rows }) =>
     console.log(`Creating terminal for agent ${agentId}:`, {
       shell,
       cwd: cwd || env.HOME,
+      command: command || 'none',
       hasHOME: !!env.HOME,
       hasPATH: !!env.PATH,
       shellExists: fs.existsSync(shell),
@@ -847,6 +1257,15 @@ ipcMain.handle('create-terminal', async (event, { agentId, cwd, cols, rows }) =>
     });
 
     terminals.set(agentId, ptyProcess);
+
+    // Run initial command if provided (e.g., "lazygit")
+    if (command) {
+      // Give the shell a moment to initialize
+      setTimeout(() => {
+        ptyProcess.write(`${command}\r`);
+      }, 100);
+    }
+
     console.log(`Terminal created successfully for agent ${agentId}`);
     return { success: true };
   } catch (error) {
