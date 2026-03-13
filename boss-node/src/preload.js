@@ -30,6 +30,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveProjectAs: () => ipcRenderer.invoke('save-project-as'),
   getCurrentProject: () => ipcRenderer.invoke('get-current-project'),
 
+  // Settings
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
+  browseFolder: () => ipcRenderer.invoke('browse-folder'),
+  onShowSettings: (callback) => {
+    ipcRenderer.on('show-settings', () => callback());
+  },
+
   // Terminal
   createTerminal: (data) => ipcRenderer.invoke('create-terminal', data),
   writeTerminal: (data) => ipcRenderer.invoke('write-terminal', data),

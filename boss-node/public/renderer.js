@@ -1646,6 +1646,43 @@ window.electronAPI.onSaveProjectAs(async () => {
   }
 });
 
+// --- Settings Dialog ---
+const settingsDialog = document.getElementById('settings-dialog');
+const repoRootInput = document.getElementById('repo-root-path');
+
+function showSettingsDialog() {
+  // Load current settings into the dialog
+  window.electronAPI.getSettings().then(settings => {
+    repoRootInput.value = settings.repoRoot || '';
+  });
+  settingsDialog.style.display = 'flex';
+}
+
+function hideSettingsDialog() {
+  settingsDialog.style.display = 'none';
+}
+
+document.getElementById('close-settings-dialog').addEventListener('click', hideSettingsDialog);
+document.getElementById('cancel-settings-dialog').addEventListener('click', hideSettingsDialog);
+
+document.getElementById('browse-repo-root').addEventListener('click', async () => {
+  const result = await window.electronAPI.browseFolder();
+  if (!result.canceled) {
+    repoRootInput.value = result.path;
+  }
+});
+
+document.getElementById('save-settings').addEventListener('click', async () => {
+  const settings = await window.electronAPI.getSettings();
+  settings.repoRoot = repoRootInput.value || '';
+  await window.electronAPI.saveSettings(settings);
+  hideSettingsDialog();
+});
+
+window.electronAPI.onShowSettings(() => {
+  showSettingsDialog();
+});
+
 // --- Tab System ---
 function switchTab(tabId) {
   activeTab = tabId;

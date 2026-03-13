@@ -29,6 +29,31 @@ function saveConsoles(consoles) {
   fs.writeFileSync(CONSOLES_FILE(), JSON.stringify(consoles, null, 2), 'utf8');
 }
 
+// App settings persistence
+const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
+
+function loadSettings() {
+  try {
+    const data = fs.readFileSync(SETTINGS_FILE(), 'utf8');
+    return JSON.parse(data);
+  } catch {
+    return {};
+  }
+}
+
+function saveSettings(settings) {
+  const dir = path.dirname(SETTINGS_FILE());
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(SETTINGS_FILE(), JSON.stringify(settings, null, 2), 'utf8');
+}
+
+function getReposDir() {
+  const settings = loadSettings();
+  return settings.repoRoot || path.join(app.getPath('userData'), 'repos');
+}
+
 // Agent config persistence (legacy - for migration)
 const AGENTS_FILE = () => path.join(app.getPath('userData'), 'agents.json');
 const DEFAULT_PROJECT_PATH = () => path.join(app.getPath('userData'), 'default-project.ppproject');
@@ -248,6 +273,14 @@ function createWindow() {
         },
         { type: 'separator' },
         {
+          label: 'Settings',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => {
+            mainWindow.webContents.send('show-settings');
+          },
+        },
+        { type: 'separator' },
+        {
           label: 'Exit',
           click: () => {
             app.quit();
@@ -434,6 +467,31 @@ ipcMain.handle('get-current-project', async () => {
   } catch (err) {
     return { success: false, error: err.message };
   }
+});
+
+// IPC: Get settings
+ipcMain.handle('get-settings', async () => {
+  return loadSettings();
+});
+
+// IPC: Save settings
+ipcMain.handle('save-settings', async (event, settings) => {
+  saveSettings(settings);
+  return { success: true };
+});
+
+// IPC: Browse for folder
+ipcMain.handle('browse-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select Repo Root Directory',
+    properties: ['openDirectory', 'createDirectory']
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  return { path: result.filePaths[0] };
 });
 
 app.whenReady().then(() => {
@@ -853,7 +911,7 @@ ipcMain.handle('clone-and-start-agent', async (event, config) => {
     }
 
     // Create repos directory if it doesn't exist
-    const reposDir = path.join(app.getPath('userData'), 'repos');
+    const reposDir = getReposDir();
     if (!fs.existsSync(reposDir)) {
       fs.mkdirSync(reposDir, { recursive: true });
     }

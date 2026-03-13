@@ -964,6 +964,19 @@ body {
   border-color: var(--accent-btn);
 }
 
+.input-with-button {
+  display: flex;
+  gap: 8px;
+}
+
+.input-with-button input {
+  flex: 1;
+}
+
+.input-with-button .btn {
+  white-space: nowrap;
+}
+
 .dialog-footer {
   display: flex;
   justify-content: flex-end;
