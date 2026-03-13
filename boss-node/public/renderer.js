@@ -467,7 +467,7 @@ function parseAssistantMessage(obj) {
     switch (blockType) {
       case 'text':
         if (block.text) {
-          parts.push(block.text);
+          parts.push(shortenFilePaths(block.text));
         }
         break;
       case 'tool_use':
@@ -475,7 +475,7 @@ function parseAssistantMessage(obj) {
         const input = block.input || {};
         const inputParts = Object.entries(input)
           .map(([k, v]) => {
-            let val = String(v);
+            let val = shortenFilePaths(String(v));
             if (val.length > 60) {
               val = val.substring(0, 57) + '...';
             }
@@ -502,9 +502,9 @@ function parseContentBlockDelta(obj) {
 
   switch (deltaType) {
     case 'text_delta':
-      return { text: delta.text || '', type: 'default' };
+      return { text: shortenFilePaths(delta.text || ''), type: 'default' };
     case 'thinking_delta':
-      return { text: `[thinking] ${delta.text || ''}`, type: 'default' };
+      return { text: `[thinking] ${shortenFilePaths(delta.text || '')}`, type: 'default' };
     default:
       return { text: '', type: 'default' };
   }
@@ -533,6 +533,18 @@ function parseResult(obj) {
   return { text: '[✓] Command completed successfully', type: 'done' };
 }
 
+function shortenFilePaths(text) {
+  // Pattern to match file paths with /repos/{agentName}/
+  // Matches paths like: /Users/.../parallelagents-boss-node/repos/a2/app/...
+  const reposPattern = /([^\s]*\/repos\/([^\/\s]+)\/[^\s]*)/g;
+
+  return text.replace(reposPattern, (match, fullPath, agentName) => {
+    // Extract everything after /repos/
+    const afterRepos = fullPath.substring(fullPath.indexOf('/repos/') + 7);
+    return afterRepos;
+  });
+}
+
 function parseUserMessage(obj) {
   const content = obj.message?.content || [];
   for (const block of content) {
@@ -540,21 +552,14 @@ function parseUserMessage(obj) {
       const isError = block.is_error || false;
       let resultContent = block.content || '';
 
+      // Shorten file paths
+      resultContent = shortenFilePaths(resultContent);
+
+      // Don't truncate - show full output
       if (isError) {
-        if (resultContent.length > 200) {
-          resultContent = resultContent.substring(0, 197) + '...';
-        }
         return { text: `[tool_result] ERROR: ${resultContent}`, type: 'tool_result' };
       }
 
-      if (resultContent.length > 150) {
-        const lines = resultContent.split('\n');
-        if (lines.length > 3) {
-          resultContent = lines.slice(0, 3).join('\n') + `\n  ... (${lines.length - 3} more lines)`;
-        } else if (resultContent.length > 150) {
-          resultContent = resultContent.substring(0, 147) + '...';
-        }
-      }
       return { text: `[tool_result] ${resultContent}`, type: 'tool_result' };
     }
   }
@@ -1340,9 +1345,6 @@ window.electronAPI.onNewProject(async () => {
 
 // Listen for open project command
 window.electronAPI.onOpenProject(async () => {
-  const confirm = window.confirm('Open a project? This will close all current agents.');
-  if (!confirm) return;
-
   try {
     const result = await window.electronAPI.openProject();
     if (result.success) {
@@ -1369,7 +1371,7 @@ window.electronAPI.onOpenProject(async () => {
             status: 'idle',
             output: [],
             currentPrompt: '',
-            isTemp: false,  // These are persisted agents
+            isTemp: true,  // Mark as temp so they can be migrated when real agent connects
             deviceSerial: null,
             repoPath: agentConfig.repoPath,
           };
@@ -1386,8 +1388,6 @@ window.electronAPI.onOpenProject(async () => {
         agentCountEl.textContent = '0 Agents';
         noAgentsView.style.display = 'flex';
       }
-
-      alert(`Project opened: ${result.projectName}`);
 
       // Reconnect to trigger agent restoration via main process
       setTimeout(() => {

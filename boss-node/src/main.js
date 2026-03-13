@@ -354,6 +354,9 @@ ipcMain.handle('open-project', async () => {
     }
     agents.clear();
 
+    // Start agents from the opened project
+    restoreSavedAgents();
+
     return {
       success: true,
       projectPath,
@@ -1071,7 +1074,13 @@ function startAgentProcess(tempAgentId, agentName, repoPath, githubUrl, silent =
   agentProcess.stderr.on('data', (data) => {
     const trimmed = data.toString().trim();
     console.error(`[Agent ${agentName}] ${trimmed}`);
-    if (trimmed) {
+
+    // Filter out internal agent connection/reconnection logs
+    const isInternalLog = trimmed.includes('connected and registered as') ||
+                          trimmed.includes('disconnected:') ||
+                          trimmed.includes('reconnecting...');
+
+    if (trimmed && !isInternalLog) {
       sendToRenderer('agent-output', {
         agentId: tempAgentId,
         output: trimmed,
