@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveConsoles: (consoles) => ipcRenderer.invoke('save-consoles', consoles),
 
   // Build and launch
+  findAndroidProjects: (data) => ipcRenderer.invoke('find-android-projects', data),
   buildAndLaunch: (data) => ipcRenderer.invoke('build-and-launch', data),
 
   // Git info and sync

@@ -54,11 +54,16 @@ async function init() {
     persistDeviceAssignments();
   }
 
-  // Load current project's github URL
+  // Load current project info
   try {
     const projectInfo = await window.electronAPI.getCurrentProject();
-    if (projectInfo.success && projectInfo.githubUrl) {
-      currentProjectGithubUrl = projectInfo.githubUrl;
+    if (projectInfo.success) {
+      if (projectInfo.githubUrl) {
+        currentProjectGithubUrl = projectInfo.githubUrl;
+      }
+      if (projectInfo.projectName) {
+        document.getElementById('project-name').textContent = projectInfo.projectName;
+      }
     }
   } catch (e) {
     console.log('No current project loaded');
@@ -182,13 +187,40 @@ async function handlePlay(agentId) {
     playBtn.classList.add('building');
   }
 
-  appendToConsole(agentId, 'Starting build...', 'system');
-
   try {
+    // Find Android project if not already resolved
+    let androidProjectPath = agent.androidProjectPath || null;
+
+    if (!androidProjectPath) {
+      appendToConsole(agentId, 'Searching for Android project...', 'system');
+      const result = await window.electronAPI.findAndroidProjects({ projectPath: agent.repoPath });
+      const projects = result.projects;
+
+      if (projects.length === 0) {
+        appendToConsole(agentId, 'No Android project (gradlew) found.', 'error');
+        return;
+      } else if (projects.length === 1) {
+        androidProjectPath = projects[0].path;
+        agent.androidProjectPath = androidProjectPath;
+        appendToConsole(agentId, `Found Android project: ${projects[0].relativePath || '.'}`, 'system');
+      } else {
+        // Multiple projects — ask user to pick
+        androidProjectPath = await showAndroidProjectPicker(agentId, projects);
+        if (!androidProjectPath) {
+          appendToConsole(agentId, 'Build cancelled — no project selected.', 'system');
+          return;
+        }
+        agent.androidProjectPath = androidProjectPath;
+      }
+    }
+
+    appendToConsole(agentId, 'Starting build...', 'system');
+
     await window.electronAPI.buildAndLaunch({
       consoleId: agentId,
       deviceSerial: agent.deviceSerial,
       projectPath: agent.repoPath,
+      androidProjectPath,
     });
   } catch (err) {
     appendToConsole(agentId, `Build error: ${err.message}`, 'error');
@@ -198,6 +230,50 @@ async function handlePlay(agentId) {
     playBtn.classList.remove('building');
     updatePlayButton(agentId);
   }
+}
+
+function showAndroidProjectPicker(agentId, projects) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'dialog-overlay';
+    overlay.innerHTML = `
+      <div class="dialog">
+        <div class="dialog-header">
+          <h2>Select Android Project</h2>
+        </div>
+        <div class="dialog-content">
+          <p style="margin-bottom: 12px; color: var(--text-secondary); font-size: 13px;">
+            Multiple Android projects found. Select which one to build:
+          </p>
+          <div class="android-project-list">
+            ${projects.map((p, i) => `
+              <button class="android-project-option" data-idx="${i}">
+                ${escapeHtml(p.relativePath || '.')}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" id="cancel-android-picker">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#cancel-android-picker').addEventListener('click', () => {
+      overlay.remove();
+      resolve(null);
+    });
+
+    overlay.querySelectorAll('.android-project-option').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx);
+        overlay.remove();
+        resolve(projects[idx].path);
+      });
+    });
+  });
 }
 
 // Listen for build output from main process
@@ -643,41 +719,31 @@ function createAgentConsole(agentId) {
     <div class="pinned-prompt hidden" id="prompt-${agentId}"></div>
     <div class="console-output" id="output-${agentId}"></div>
     <div class="prompt-list-container" id="prompt-list-container-${agentId}">
-      <div class="prompt-list-header">
-        <span class="prompt-list-title">Prompts</span>
-      </div>
-      <div class="prompt-list" id="prompt-list-${agentId}">
-        <div class="prompt-list-empty">No saved prompts</div>
-      </div>
-      <div class="prompt-add-container">
+      <div class="prompt-input-container">
         <input
           type="text"
-          class="prompt-add-input"
-          id="prompt-add-input-${agentId}"
-          placeholder="${isTemp ? 'Waiting for agent...' : 'Add a new prompt...'}"
+          class="prompt-input"
+          id="prompt-input-${agentId}"
+          placeholder="${isTemp ? 'Waiting for agent...' : 'Type a prompt and press Enter...'}"
           autocomplete="off"
           ${isDisabled}
         >
-        <button class="prompt-add-btn" id="prompt-add-btn-${agentId}" ${isDisabled}>+</button>
       </div>
+      <div class="prompt-list" id="prompt-list-${agentId}"></div>
     </div>
   `;
 
   mainContent.appendChild(consoleDiv);
 
-  // Add event listener for Enter key on prompt add input
-  const addInput = document.getElementById(`prompt-add-input-${agentId}`);
-  addInput.addEventListener('keydown', (e) => {
+  // Send prompt on Enter — immediately execute and cache
+  const promptInput = document.getElementById(`prompt-input-${agentId}`);
+  promptInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !agent.isTemp) {
-      addPromptToAgent(agentId);
-    }
-  });
-
-  // Add button click
-  const addBtn = document.getElementById(`prompt-add-btn-${agentId}`);
-  addBtn.addEventListener('click', () => {
-    if (!agent.isTemp) {
-      addPromptToAgent(agentId);
+      const text = promptInput.value.trim();
+      if (!text) return;
+      promptInput.value = '';
+      sendPromptText(agentId, text);
+      cachePrompt(agentId, text);
     }
   });
 
@@ -1396,25 +1462,26 @@ function renderPromptList(agentId) {
   const prompts = agent.prompts || [];
 
   if (prompts.length === 0) {
-    listEl.innerHTML = '<div class="prompt-list-empty">No saved prompts</div>';
+    listEl.innerHTML = '';
     return;
   }
 
-  listEl.innerHTML = prompts.map((prompt, idx) => `
-    <div class="prompt-item" data-idx="${idx}">
+  // Show most recent first
+  listEl.innerHTML = prompts.slice().reverse().map((prompt, displayIdx) => {
+    const realIdx = prompts.length - 1 - displayIdx;
+    return `
+    <div class="prompt-item" data-idx="${realIdx}" data-agent-id="${agentId}">
       <span class="prompt-item-text" title="${escapeHtml(prompt)}">${escapeHtml(prompt)}</span>
-      <div class="prompt-item-actions">
-        <button class="prompt-run-btn" data-agent-id="${agentId}" data-idx="${idx}" title="Run this prompt">Run</button>
-        <button class="prompt-delete-btn" data-agent-id="${agentId}" data-idx="${idx}" title="Delete this prompt">&times;</button>
-      </div>
-    </div>
-  `).join('');
+      <button class="prompt-delete-btn" data-agent-id="${agentId}" data-idx="${realIdx}" title="Delete">&times;</button>
+    </div>`;
+  }).join('');
 
-  // Attach event listeners
-  listEl.querySelectorAll('.prompt-run-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = parseInt(btn.dataset.idx);
-      const aid = btn.dataset.agentId;
+  // Click prompt text to send immediately
+  listEl.querySelectorAll('.prompt-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.closest('.prompt-delete-btn')) return;
+      const idx = parseInt(item.dataset.idx);
+      const aid = item.dataset.agentId;
       const a = agents.get(aid);
       if (a && a.prompts[idx]) {
         sendPromptText(aid, a.prompts[idx]);
@@ -1423,7 +1490,8 @@ function renderPromptList(agentId) {
   });
 
   listEl.querySelectorAll('.prompt-delete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       const idx = parseInt(btn.dataset.idx);
       const aid = btn.dataset.agentId;
       deletePromptFromAgent(aid, idx);
@@ -1431,17 +1499,23 @@ function renderPromptList(agentId) {
   });
 }
 
-async function addPromptToAgent(agentId) {
+async function cachePrompt(agentId, text) {
   const agent = agents.get(agentId);
   if (!agent) return;
 
-  const input = document.getElementById(`prompt-add-input-${agentId}`);
-  const text = input.value.trim();
-  if (!text) return;
-
   if (!agent.prompts) agent.prompts = [];
+
+  // Avoid duplicate of the most recent prompt
+  if (agent.prompts.length > 0 && agent.prompts[agent.prompts.length - 1] === text) {
+    return;
+  }
+
   agent.prompts.push(text);
-  input.value = '';
+
+  // Cap at 100
+  if (agent.prompts.length > 100) {
+    agent.prompts = agent.prompts.slice(-100);
+  }
 
   renderPromptList(agentId);
 
@@ -1571,6 +1645,7 @@ document.getElementById('confirm-new-project').addEventListener('click', async (
       agentCountEl.textContent = '0 Agents';
       noAgentsView.style.display = 'flex';
       currentProjectGithubUrl = githubUrl;
+      document.getElementById('project-name').textContent = projectName;
 
       console.log('New project created:', result.projectPath);
     }
@@ -1694,6 +1769,7 @@ window.electronAPI.onOpenProject(async () => {
       console.log('Project opened:', result.projectPath);
       console.log('Agents in project:', result.agents);
       currentProjectGithubUrl = result.githubUrl || '';
+      document.getElementById('project-name').textContent = result.projectName || '';
 
       // Restore agents from project
       if (result.agents && result.agents.length > 0) {

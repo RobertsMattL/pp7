@@ -9,6 +9,25 @@ const agents = new Map(); // agentId -> { process, repoPath, ... }
 const terminals = new Map(); // agentId -> pty process
 let currentProjectPath = null; // Path to the current project file
 
+// Restore last project path early so it's available before the window loads
+function initCurrentProjectPath() {
+  const settings = loadSettings();
+  if (settings.lastProjectPath && fs.existsSync(settings.lastProjectPath)) {
+    currentProjectPath = settings.lastProjectPath;
+  } else if (fs.existsSync(DEFAULT_PROJECT_PATH())) {
+    currentProjectPath = DEFAULT_PROJECT_PATH();
+  }
+}
+
+function setCurrentProjectPath(projectPath) {
+  currentProjectPath = projectPath;
+  if (projectPath) {
+    const settings = loadSettings();
+    settings.lastProjectPath = projectPath;
+    saveSettings(settings);
+  }
+}
+
 // Console persistence
 const CONSOLES_FILE = () => path.join(app.getPath('userData'), 'consoles.json');
 
@@ -77,6 +96,13 @@ function loadSavedAgents() {
     return loadProjectAgents(currentProjectPath);
   }
 
+  // Try to restore last opened project from settings
+  const settings = loadSettings();
+  if (settings.lastProjectPath && fs.existsSync(settings.lastProjectPath)) {
+    currentProjectPath = settings.lastProjectPath;
+    return loadProjectAgents(currentProjectPath);
+  }
+
   // Try to load default project
   if (fs.existsSync(DEFAULT_PROJECT_PATH())) {
     currentProjectPath = DEFAULT_PROJECT_PATH();
@@ -109,7 +135,7 @@ function migrateFromAgentsJson() {
 
     // Save as default project
     saveProject(DEFAULT_PROJECT_PATH(), project);
-    currentProjectPath = DEFAULT_PROJECT_PATH();
+    setCurrentProjectPath(DEFAULT_PROJECT_PATH());
 
     // Rename old agents.json to agents.json.backup
     fs.renameSync(AGENTS_FILE(), AGENTS_FILE() + '.backup');
@@ -198,7 +224,7 @@ function saveAgentConfig(agentName, repoPath, githubUrl) {
 
   project.agents = saved;
   saveProject(projectPath, project);
-  currentProjectPath = projectPath;
+  setCurrentProjectPath(projectPath);
 }
 
 function removeAgentConfig(agentName) {
@@ -388,7 +414,7 @@ ipcMain.handle('new-project', async (event, config) => {
   };
 
   saveProject(projectPath, project);
-  currentProjectPath = projectPath;
+  setCurrentProjectPath(projectPath);
 
   // Stop all current agents
   for (const [agentId, agent] of agents) {
@@ -422,7 +448,7 @@ ipcMain.handle('open-project', async () => {
     const data = fs.readFileSync(projectPath, 'utf8');
     const project = JSON.parse(data);
 
-    currentProjectPath = projectPath;
+    setCurrentProjectPath(projectPath);
 
     // Stop all current agents
     for (const [agentId, agent] of agents) {
@@ -482,7 +508,7 @@ ipcMain.handle('save-project-as', async () => {
   }
 
   saveProject(projectPath, project);
-  currentProjectPath = projectPath;
+  setCurrentProjectPath(projectPath);
 
   return { success: true, projectPath, projectName };
 });
@@ -534,6 +560,7 @@ ipcMain.handle('browse-folder', async () => {
 });
 
 app.whenReady().then(() => {
+  initCurrentProjectPath();
   createWindow();
   // Restore previously saved agents after window is ready
   mainWindow.webContents.on('did-finish-load', () => {
@@ -646,55 +673,80 @@ ipcMain.handle('save-consoles', async (event, consoles) => {
 });
 
 // IPC: Build and launch Android app on device
-ipcMain.handle('build-and-launch', async (event, { consoleId, deviceSerial, projectPath }) => {
+// Recursively find all Android projects (directories containing gradlew) under a root path
+function findAndroidProjects(rootPath, maxDepth = 5) {
+  const results = [];
+
+  function search(dir, depth) {
+    if (depth > maxDepth) return;
+    try {
+      if (fs.existsSync(path.join(dir, 'gradlew'))) {
+        results.push(dir);
+        return; // Don't search inside an Android project
+      }
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name.startsWith('.') || entry.name === 'node_modules' || entry.name === 'build') continue;
+        search(path.join(dir, entry.name), depth + 1);
+      }
+    } catch {
+      // Permission denied or other error — skip
+    }
+  }
+
+  search(rootPath, 0);
+  return results;
+}
+
+ipcMain.handle('find-android-projects', async (event, { projectPath }) => {
+  const projects = findAndroidProjects(projectPath);
+  return {
+    projects: projects.map(p => ({
+      path: p,
+      relativePath: path.relative(projectPath, p) || '.',
+    })),
+  };
+});
+
+ipcMain.handle('build-and-launch', async (event, { consoleId, deviceSerial, projectPath, androidProjectPath }) => {
   const adbPath = getAdbPath();
 
-  // Notify renderer of build start
-  mainWindow.webContents.send('build-output', {
-    consoleId,
-    output: `Building Android project...\n`,
-    type: 'system',
-  });
+  // Determine the Android project directory
+  let cwd = androidProjectPath || null;
 
-  // Determine build command based on project structure
-  let buildCmd, buildArgs, cwd;
-
-  if (fs.existsSync(path.join(projectPath, 'gradlew'))) {
-    buildCmd = './gradlew';
-    buildArgs = ['installDebug', `-PandroidSerial=${deviceSerial}`];
-    cwd = projectPath;
-  } else if (fs.existsSync(path.join(projectPath, 'app', 'build.gradle')) ||
-             fs.existsSync(path.join(projectPath, 'app', 'build.gradle.kts'))) {
-    buildCmd = './gradlew';
-    buildArgs = ['installDebug'];
-    cwd = projectPath;
-  } else {
-    // Fallback: try to find gradlew in subdirectories
-    const dirs = fs.readdirSync(projectPath, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-
-    let found = false;
-    for (const dir of dirs) {
-      const gradlew = path.join(projectPath, dir, 'gradlew');
-      if (fs.existsSync(gradlew)) {
-        buildCmd = './gradlew';
-        buildArgs = ['installDebug'];
-        cwd = path.join(projectPath, dir);
-        found = true;
-        break;
-      }
-    }
-
-    if (!found) {
+  if (!cwd) {
+    // Auto-detect
+    const projects = findAndroidProjects(projectPath);
+    if (projects.length === 1) {
+      cwd = projects[0];
+    } else if (projects.length === 0) {
       mainWindow.webContents.send('build-output', {
         consoleId,
         output: `No Android project (gradlew) found in ${projectPath}\n`,
         type: 'error',
       });
       return { success: false, error: 'No gradlew found' };
+    } else {
+      // Multiple found — shouldn't reach here, renderer should have resolved this
+      mainWindow.webContents.send('build-output', {
+        consoleId,
+        output: `Multiple Android projects found. Please select one first.\n`,
+        type: 'error',
+      });
+      return { success: false, error: 'Multiple Android projects found' };
     }
   }
+
+  // Notify renderer of build start
+  mainWindow.webContents.send('build-output', {
+    consoleId,
+    output: `Building Android project in ${path.relative(projectPath, cwd) || '.'}...\n`,
+    type: 'system',
+  });
+
+  const buildCmd = './gradlew';
+  const buildArgs = ['installDebug', `-PandroidSerial=${deviceSerial}`];
 
   // Set ANDROID_SERIAL so gradle installs to the right device
   const env = { ...process.env, ANDROID_SERIAL: deviceSerial };
