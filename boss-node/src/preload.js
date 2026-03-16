@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAgents: () => ipcRenderer.invoke('get-agents'),
   stopAgent: (agentId) => ipcRenderer.invoke('stop-agent', agentId),
   sendPromptToAgent: (data) => ipcRenderer.invoke('send-prompt-to-agent', data),
+  getAgentPrompts: (agentName) => ipcRenderer.invoke('get-agent-prompts', agentName),
+  saveAgentPrompts: (data) => ipcRenderer.invoke('save-agent-prompts', data),
 
   // ADB device management
   getAdbDevices: () => ipcRenderer.invoke('get-adb-devices'),

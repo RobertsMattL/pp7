@@ -142,12 +142,38 @@ function saveProject(projectPath, project) {
   fs.writeFileSync(projectPath, JSON.stringify(project, null, 2), 'utf8');
 }
 
+function getAgentPrompts(agentName) {
+  const saved = loadSavedAgents();
+  const agent = saved.find(a => a.name === agentName);
+  return (agent && agent.prompts) || [];
+}
+
+function saveAgentPrompts(agentName, prompts) {
+  const saved = loadSavedAgents();
+  const idx = saved.findIndex(a => a.name === agentName);
+  if (idx >= 0) {
+    saved[idx].prompts = prompts;
+  } else {
+    return; // agent not found
+  }
+
+  const projectPath = currentProjectPath || DEFAULT_PROJECT_PATH();
+  if (fs.existsSync(projectPath)) {
+    const data = fs.readFileSync(projectPath, 'utf8');
+    const project = JSON.parse(data);
+    project.agents = saved;
+    saveProject(projectPath, project);
+  }
+}
+
 function saveAgentConfig(agentName, repoPath, githubUrl) {
   const saved = loadSavedAgents();
   // Update existing or add new
   const idx = saved.findIndex(a => a.name === agentName);
-  const entry = { name: agentName, repoPath, githubUrl };
+  const entry = { name: agentName, repoPath, githubUrl, prompts: [] };
   if (idx >= 0) {
+    // Preserve existing prompts
+    entry.prompts = saved[idx].prompts || [];
     saved[idx] = entry;
   } else {
     saved.push(entry);
@@ -1289,6 +1315,15 @@ ipcMain.handle('send-prompt-to-agent', async (event, { agentId, prompt }) => {
   // This will be handled by the WebSocket connection in the renderer
   // For now, just echo back for testing
   return { success: true, agentId, prompt };
+});
+
+ipcMain.handle('get-agent-prompts', async (event, agentName) => {
+  return getAgentPrompts(agentName);
+});
+
+ipcMain.handle('save-agent-prompts', async (event, { agentName, prompts }) => {
+  saveAgentPrompts(agentName, prompts);
+  return { success: true };
 });
 
 // IPC: Create a PTY terminal for an agent

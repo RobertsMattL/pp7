@@ -349,8 +349,10 @@ function handleAgentList(agentList) {
         currentPrompt: '',
         deviceSerial: cachedSerial,
         repoPath: repoPath,
+        prompts: tempAgent.agent.prompts || [],
       });
       createAgentConsole(agentInfo.agent_id);
+      loadAgentPrompts(agentInfo.agent_id);
 
       // Migrate output
       const newOutputDiv = document.getElementById(`output-${agentInfo.agent_id}`);
@@ -640,26 +642,42 @@ function createAgentConsole(agentId) {
     ` : ''}
     <div class="pinned-prompt hidden" id="prompt-${agentId}"></div>
     <div class="console-output" id="output-${agentId}"></div>
-    <div class="console-input-container">
-      <input
-        type="text"
-        class="console-input"
-        id="input-${agentId}"
-        placeholder="${placeholder}"
-        autocomplete="off"
-        ${isDisabled}
-      >
-      <button class="send-btn" onclick="sendPrompt('${agentId}')" ${isDisabled}>Send</button>
+    <div class="prompt-list-container" id="prompt-list-container-${agentId}">
+      <div class="prompt-list-header">
+        <span class="prompt-list-title">Prompts</span>
+      </div>
+      <div class="prompt-list" id="prompt-list-${agentId}">
+        <div class="prompt-list-empty">No saved prompts</div>
+      </div>
+      <div class="prompt-add-container">
+        <input
+          type="text"
+          class="prompt-add-input"
+          id="prompt-add-input-${agentId}"
+          placeholder="${isTemp ? 'Waiting for agent...' : 'Add a new prompt...'}"
+          autocomplete="off"
+          ${isDisabled}
+        >
+        <button class="prompt-add-btn" id="prompt-add-btn-${agentId}" ${isDisabled}>+</button>
+      </div>
     </div>
   `;
 
   mainContent.appendChild(consoleDiv);
 
-  // Add event listener for Enter key
-  const input = document.getElementById(`input-${agentId}`);
-  input.addEventListener('keydown', (e) => {
+  // Add event listener for Enter key on prompt add input
+  const addInput = document.getElementById(`prompt-add-input-${agentId}`);
+  addInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !agent.isTemp) {
-      sendPrompt(agentId);
+      addPromptToAgent(agentId);
+    }
+  });
+
+  // Add button click
+  const addBtn = document.getElementById(`prompt-add-btn-${agentId}`);
+  addBtn.addEventListener('click', () => {
+    if (!agent.isTemp) {
+      addPromptToAgent(agentId);
     }
   });
 
@@ -987,6 +1005,7 @@ function appendToConsole(agentId, text, type = 'default') {
       isTemp: true,
       deviceSerial: null,
       repoPath: null,
+      prompts: [],
     };
     agents.set(agentId, agent);
     noAgentsView.style.display = 'none';
@@ -1352,13 +1371,104 @@ function highlightCodeBlocks(outputDiv) {
 }
 
 
-function sendPrompt(agentId) {
-  const input = document.getElementById(`input-${agentId}`);
-  if (!input) return;
+// --- Prompt List Management ---
 
-  const prompt = input.value.trim();
-  if (!prompt) return;
+async function loadAgentPrompts(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent || agent.isTemp) return;
 
+  try {
+    const prompts = await window.electronAPI.getAgentPrompts(agent.name);
+    agent.prompts = prompts || [];
+    renderPromptList(agentId);
+  } catch (err) {
+    console.error('Failed to load prompts:', err);
+  }
+}
+
+function renderPromptList(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent) return;
+
+  const listEl = document.getElementById(`prompt-list-${agentId}`);
+  if (!listEl) return;
+
+  const prompts = agent.prompts || [];
+
+  if (prompts.length === 0) {
+    listEl.innerHTML = '<div class="prompt-list-empty">No saved prompts</div>';
+    return;
+  }
+
+  listEl.innerHTML = prompts.map((prompt, idx) => `
+    <div class="prompt-item" data-idx="${idx}">
+      <span class="prompt-item-text" title="${escapeHtml(prompt)}">${escapeHtml(prompt)}</span>
+      <div class="prompt-item-actions">
+        <button class="prompt-run-btn" data-agent-id="${agentId}" data-idx="${idx}" title="Run this prompt">Run</button>
+        <button class="prompt-delete-btn" data-agent-id="${agentId}" data-idx="${idx}" title="Delete this prompt">&times;</button>
+      </div>
+    </div>
+  `).join('');
+
+  // Attach event listeners
+  listEl.querySelectorAll('.prompt-run-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      const aid = btn.dataset.agentId;
+      const a = agents.get(aid);
+      if (a && a.prompts[idx]) {
+        sendPromptText(aid, a.prompts[idx]);
+      }
+    });
+  });
+
+  listEl.querySelectorAll('.prompt-delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx);
+      const aid = btn.dataset.agentId;
+      deletePromptFromAgent(aid, idx);
+    });
+  });
+}
+
+async function addPromptToAgent(agentId) {
+  const agent = agents.get(agentId);
+  if (!agent) return;
+
+  const input = document.getElementById(`prompt-add-input-${agentId}`);
+  const text = input.value.trim();
+  if (!text) return;
+
+  if (!agent.prompts) agent.prompts = [];
+  agent.prompts.push(text);
+  input.value = '';
+
+  renderPromptList(agentId);
+
+  // Persist
+  try {
+    await window.electronAPI.saveAgentPrompts({ agentName: agent.name, prompts: agent.prompts });
+  } catch (err) {
+    console.error('Failed to save prompts:', err);
+  }
+}
+
+async function deletePromptFromAgent(agentId, idx) {
+  const agent = agents.get(agentId);
+  if (!agent || !agent.prompts) return;
+
+  agent.prompts.splice(idx, 1);
+  renderPromptList(agentId);
+
+  // Persist
+  try {
+    await window.electronAPI.saveAgentPrompts({ agentName: agent.name, prompts: agent.prompts });
+  } catch (err) {
+    console.error('Failed to save prompts:', err);
+  }
+}
+
+function sendPromptText(agentId, prompt) {
   const agent = agents.get(agentId);
   if (!agent) return;
 
@@ -1391,13 +1501,9 @@ function sendPrompt(agentId) {
   } else {
     appendToConsole(agentId, '[ERROR] Not connected to server', 'error');
   }
-
-  // Clear input
-  input.value = '';
 }
 
-// Expose sendPrompt to global scope for button onclick
-window.sendPrompt = sendPrompt;
+// sendPrompt is no longer used - prompts are now sent via the prompt list UI
 
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -1605,6 +1711,7 @@ window.electronAPI.onOpenProject(async () => {
             isTemp: true,  // Mark as temp so they can be migrated when real agent connects
             deviceSerial: null,
             repoPath: agentConfig.repoPath,
+            prompts: agentConfig.prompts || [],
           };
           agents.set(tempAgentId, agent);
           createAgentConsole(tempAgentId);
