@@ -54,7 +54,7 @@ async function init() {
     persistDeviceAssignments();
   }
 
-  // Load current project info
+  // Load current project info and create temp agents for restoration
   try {
     const projectInfo = await window.electronAPI.getCurrentProject();
     if (projectInfo.success) {
@@ -63,6 +63,29 @@ async function init() {
       }
       if (projectInfo.projectName) {
         document.getElementById('project-name').textContent = projectInfo.projectName;
+      }
+
+      // Create temp agents so they can be matched when real agents connect via WebSocket
+      if (projectInfo.agents && projectInfo.agents.length > 0) {
+        for (const agentConfig of projectInfo.agents) {
+          const tempAgentId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          const agent = {
+            id: tempAgentId,
+            name: agentConfig.name,
+            status: 'idle',
+            output: [],
+            currentPrompt: '',
+            isTemp: true,
+            deviceSerial: null,
+            repoPath: agentConfig.repoPath,
+            prompts: agentConfig.prompts || [],
+          };
+          agents.set(tempAgentId, agent);
+          createAgentConsole(tempAgentId);
+          appendToConsole(tempAgentId, `Restoring agent "${agentConfig.name}"...`, 'system');
+        }
+        agentCountEl.textContent = `${projectInfo.agents.length} Agent${projectInfo.agents.length !== 1 ? 's' : ''}`;
+        noAgentsView.style.display = 'none';
       }
     }
   } catch (e) {

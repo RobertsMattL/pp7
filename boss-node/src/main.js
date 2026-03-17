@@ -527,7 +527,8 @@ ipcMain.handle('get-current-project', async () => {
       projectPath: currentProjectPath,
       projectName: project.name,
       githubUrl: project.githubUrl || '',
-      agentCount: project.agents ? project.agents.length : 0
+      agentCount: project.agents ? project.agents.length : 0,
+      agents: project.agents || []
     };
   } catch (err) {
     return { success: false, error: err.message };
