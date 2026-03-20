@@ -64,10 +64,10 @@ async function init() {
       if (projectInfo.projectName) {
         document.getElementById('project-name').textContent = projectInfo.projectName;
       }
-      if (projectInfo.projectPath) {
+      if (projectInfo.projectReposDir) {
         const pathEl = document.getElementById('project-path');
-        pathEl.textContent = projectInfo.projectPath;
-        pathEl.title = projectInfo.projectPath;
+        pathEl.textContent = projectInfo.projectReposDir;
+        pathEl.title = projectInfo.projectReposDir;
       }
 
       // Create temp agents so they can be matched when real agents connect via WebSocket
@@ -1675,8 +1675,8 @@ document.getElementById('confirm-new-project').addEventListener('click', async (
       currentProjectGithubUrl = githubUrl;
       document.getElementById('project-name').textContent = projectName;
       const pathEl = document.getElementById('project-path');
-      pathEl.textContent = result.projectPath || '';
-      pathEl.title = result.projectPath || '';
+      pathEl.textContent = result.projectReposDir || '';
+      pathEl.title = result.projectReposDir || '';
 
       console.log('New project created:', result.projectPath);
     }
@@ -1802,8 +1802,8 @@ window.electronAPI.onOpenProject(async () => {
       currentProjectGithubUrl = result.githubUrl || '';
       document.getElementById('project-name').textContent = result.projectName || '';
       const pathEl = document.getElementById('project-path');
-      pathEl.textContent = result.projectPath || '';
-      pathEl.title = result.projectPath || '';
+      pathEl.textContent = result.projectReposDir || '';
+      pathEl.title = result.projectReposDir || '';
 
       // Restore agents from project
       if (result.agents && result.agents.length > 0) {

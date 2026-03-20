@@ -424,7 +424,9 @@ ipcMain.handle('new-project', async (event, config) => {
   }
   agents.clear();
 
-  return { success: true, projectPath, projectName };
+  const reposDir = getReposDir();
+  const projectReposDir = finalProjectName ? path.join(reposDir, finalProjectName) : reposDir;
+  return { success: true, projectPath, projectReposDir, projectName: finalProjectName };
 });
 
 // IPC: Open existing project
@@ -461,9 +463,12 @@ ipcMain.handle('open-project', async () => {
     // Start agents from the opened project
     restoreSavedAgents();
 
+    const reposDir = getReposDir();
+    const projectReposDir = project.name ? path.join(reposDir, project.name) : reposDir;
     return {
       success: true,
       projectPath,
+      projectReposDir,
       projectName: project.name,
       githubUrl: project.githubUrl || '',
       agents: project.agents || []
@@ -522,9 +527,12 @@ ipcMain.handle('get-current-project', async () => {
   try {
     const data = fs.readFileSync(currentProjectPath, 'utf8');
     const project = JSON.parse(data);
+    const reposDir = getReposDir();
+    const projectReposDir = project.name ? path.join(reposDir, project.name) : reposDir;
     return {
       success: true,
       projectPath: currentProjectPath,
+      projectReposDir,
       projectName: project.name,
       githubUrl: project.githubUrl || '',
       agentCount: project.agents ? project.agents.length : 0,
