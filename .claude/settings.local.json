@@ -75,7 +75,8 @@
       "Bash(git push:*)",
       "Bash(find /Users/matthewroberts/development/projects/ParallelAgents/boss-node/src -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.jsx\" -o -name \"*.js\" \\\\\\) ! -path \"*/node_modules/*\" 2>/dev/null | sort)",
       "Bash(find /Users/matthewroberts/development/projects/ParallelAgents/web-viz/src -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" -o -name \"*.jsx\" -o -name \"*.js\" \\\\\\) ! -path \"*/node_modules/*\" 2>/dev/null | sort)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

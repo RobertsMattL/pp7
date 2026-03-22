@@ -14,6 +14,20 @@ let devicePollInterval = null;
 // Typewriter system: per-agent queue of text chunks to animate
 const typewriterQueues = new Map(); // agentId -> { queue: [], typing: bool, lineEl: null, cursorEl: null }
 
+// Track which console outputs have been scrolled up by the user (suppress auto-scroll)
+const userScrolledUp = new Set(); // Set of agentIds where user has scrolled up
+
+function isNearBottom(el) {
+  // Consider "near bottom" if within 50px of the bottom
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+}
+
+function autoScroll(el, agentId) {
+  if (!userScrolledUp.has(agentId)) {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
 // Code block tracking (post-process based — see highlightCodeBlocks)
 
 // Device assignments persisted by agent name (since agent IDs change between sessions)
@@ -464,7 +478,7 @@ function handleAgentList(agentList) {
         tempOutput.forEach(line => {
           newOutputDiv.appendChild(line.cloneNode(true));
         });
-        newOutputDiv.scrollTop = newOutputDiv.scrollHeight;
+        autoScroll(newOutputDiv, agentInfo.agent_id);
       }
     } else {
       // Update existing agent
@@ -762,6 +776,18 @@ function createAgentConsole(agentId) {
   `;
 
   mainContent.appendChild(consoleDiv);
+
+  // Track user scroll to suppress auto-scroll when scrolled up
+  const outputDiv = document.getElementById(`output-${agentId}`);
+  if (outputDiv) {
+    outputDiv.addEventListener('scroll', () => {
+      if (isNearBottom(outputDiv)) {
+        userScrolledUp.delete(agentId);
+      } else {
+        userScrolledUp.add(agentId);
+      }
+    });
+  }
 
   // Send prompt on Enter — immediately execute and cache
   const promptInput = document.getElementById(`prompt-input-${agentId}`);
@@ -1127,7 +1153,7 @@ function appendToConsole(agentId, text, type = 'default') {
   line.textContent = text;
 
   outputDiv.appendChild(line);
-  outputDiv.scrollTop = outputDiv.scrollHeight;
+  autoScroll(outputDiv, agentId);
 
   // Keep only last 1000 lines
   while (outputDiv.children.length > 1000) {
@@ -1258,8 +1284,8 @@ function processTypewriterQueue(agentId) {
       }
     }
 
-    // Auto-scroll
-    outputDiv.scrollTop = outputDiv.scrollHeight;
+    // Auto-scroll (only if user hasn't scrolled up)
+    autoScroll(outputDiv, agentId);
 
     // Schedule next tick
     const speed = Math.max(2, baseSpeed / speedMultiplier);
